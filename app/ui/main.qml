@@ -288,9 +288,17 @@ Rectangle {
 
     // How Qt laid out the page: for every line on screen the number of
     // visible characters (pictures count one), its y, height and x.
+    // The text is read once and cut by position: getText() of a range that
+    // touches a table returns the whole table (Qt 6.10), and table cells are
+    // marked with U+FDD0/U+FDD1, which don't count.
     function exportLayout() {
         const lines = []
         const len = te.length
+        const all = te.getText(0, len)
+        const exact = all.length === len
+        const markRe = /[\ufdd0-\ufdd2]/
+        const piece = function (a, b) { return exact ? all.slice(a, b) : te.getText(a, b) }
+        const visible = function (t) { return Array.from(t.replace(/[\s\ufdd0-\ufdd2\ufeff]/g, "")).length }
         let p = 0, lastY = -1
         for (let guard = 0; p < len && guard < 200000; guard++) {
             const r = te.positionToRectangle(p)
@@ -299,7 +307,17 @@ Rectangle {
             // which then becomes a piece of its own (drawn at its own x)
             let e = te.positionAt(te.width + 1000, r.y + r.height / 2)
             if (e <= p) e = p + 1
-            const vis = Array.from(te.getText(p, e).replace(/\s/g, "")).length
+            // in tables: stop at the cell's end, and at the cell's next line
+            if (exact) {
+                const m = all.slice(p, e).search(markRe)
+                if (m === 0) e = p + 1
+                else if (m > 0) {
+                    e = p + m
+                    const q = te.positionAt(r.x + 1, r.y + r.height + 1)
+                    if (q > p && q < e && te.positionToRectangle(q).y > r.y) e = q
+                }
+            }
+            const vis = visible(piece(p, e))
             if (vis > 0 || r.y !== lastY) {   // empty lines and rules count, trailing blanks don't
                 lines.push(vis, Math.round(r.y * 2) / 2, Math.round(r.height * 2) / 2, Math.round(r.x))
                 lastY = r.y

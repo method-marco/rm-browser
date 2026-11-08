@@ -27,6 +27,9 @@ Item {
                 if (i === 9) h += '<p style="line-height:125%">Here is a <a href="https://example.org/linked" style="color:#000000; text-decoration:underline">LINKTARGET link</a> inside text.</p>'
                 if (i === 14) h += '<p align="center"><img src="' + Qt.resolvedUrl("../../app/icon.png") + '" width="400" height="400"/></p>'
                 if (i === 20) h += '<p style="line-height:125%">Jump to <a href="#sec-3" style="color:#000000; text-decoration:underline">ANCHORLINK</a>.</p>'
+                if (i === 24) h += '<table border="1" cellspacing="0" cellpadding="6"><tr><th>Park</th><th>Best age</th><th>Why go</th></tr>'
+                                 + '<tr><td>Lotte World</td><td>3+</td><td>Indoor park, no weather worries, best for younger kids.</td></tr>'
+                                 + '<tr><td>Everland</td><td>6+</td><td>Biggest park in Korea: zoo, roller coasters, seasonal events.</td></tr></table>'
                 h += '<p style="line-height:125%">' + i + ". " + words.repeat(3 + (i % 4)) + "</p>"
             }
             const headings = []
@@ -277,7 +280,7 @@ Item {
                 prevY = req.lines[i + 1]
             }
             const te = findChild(app, "te")
-            compare(sum, Array.from(te.getText(0, te.length).replace(/\s/g, "")).length)
+            compare(sum, Array.from(te.getText(0, te.length).replace(/[\s\ufdd0-\ufdd2\ufeff]/g, "")).length)
             verify(ordered, "lines in reading order")
             compare(app.pageIndex, 2, "still on the same page")
             shot("pdf-saving")

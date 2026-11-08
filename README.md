@@ -25,6 +25,8 @@ An [AppLoad](https://github.com/asivery/rm-appload) app for reMarkable tablets: 
   select, highlight and search; links work and the headings become the PDF's table of contents. Saving again, e.g. after changing the text size, adds a new document ("Title (2)"),
   nothing is replaced. Needs the [rm-librarian](https://github.com/rmitchellscott/rm-librarian) xovi
   extension (`vellum add librarian`), which adds documents to the library without restarting it
+- **Videos** can't play here (no JavaScript, and video makes no sense on e-ink): each one becomes
+  a line "*Video:* title" linking to it, so you can watch it on another device (also from a saved PDF)
 - **One tab.** *Back*, *Forward* and *Home* in the menu
 - **Clear browsing data:** one button (home screen, menu, Settings) deletes history and searches,
   the back/forward list, cookies, and cached pages and images. Settings stay

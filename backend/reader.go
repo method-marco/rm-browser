@@ -126,6 +126,7 @@ func buildHTMLPage(ctx context.Context, f *Fetched, pg *Page, images ImageFunc, 
 	}
 
 	unwrapHeadings(doc)
+	markVideos(doc, f.URL)
 	var content string
 	// A site's front page is a list of stories, not one article: show it
 	// whole (simplified). So are pages Readability itself doesn't consider
@@ -149,6 +150,7 @@ func buildHTMLPage(ctx context.Context, f *Fetched, pg *Page, images ImageFunc, 
 		// scripts, forms, menus, pop-ups and other clutter. Readability
 		// changed the tree, so parse again.
 		doc, _ = html.Parse(bytes.NewReader(f.Body))
+		markVideos(doc, f.URL)
 		body := simplifiedRoot(doc)
 		var b strings.Builder
 		for c := body.FirstChild; c != nil; c = c.NextSibling {

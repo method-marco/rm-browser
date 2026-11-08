@@ -48,10 +48,13 @@ docker:
 
 qmltest:
 	docker build -q -t rm-browser-qmltest tests/qml
+	docker build -q -t rm-browser-qmltest-latest -f tests/qml/Dockerfile.latest tests/qml
 	mkdir -p build/qmltest/export
 	docker run --rm -v "$(CURDIR)":/repo -w /repo -e QML_XHR_ALLOW_FILE_READ=1 -e QML_XHR_ALLOW_FILE_WRITE=1 rm-browser-qmltest sh -c \
 		'/usr/lib/qt6/bin/qmltestrunner -import tests/qml/imports -input tests/qml/tst_browser.qml && \
 		 if [ -f build/fixture/index.txt ]; then /usr/lib/qt6/bin/qmltestrunner -import tests/qml/imports -input tests/qml/tst_fixtures.qml; fi'
+	docker run --rm -v "$(CURDIR)":/repo -w /repo -e QML_XHR_ALLOW_FILE_READ=1 rm-browser-qmltest-latest \
+		/usr/lib/qt6/bin/qmltestrunner -import tests/qml/imports -input tests/qml/tst_browser.qml
 
 install: $(ARCH)
 	ssh root@$(HOST) 'mkdir -p /home/root/xovi/exthome/appload'

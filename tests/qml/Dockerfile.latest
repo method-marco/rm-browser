@@ -1,0 +1,6 @@
+# Headless test image with a current Qt (the tablet runs Qt 6.10; Debian's
+# 6.4 behaves differently in places, e.g. TextEdit.getText() on tables).
+FROM --platform=linux/amd64 archlinux:latest
+RUN pacman -Syu --disable-sandbox --noconfirm --needed qt6-base qt6-declarative fontconfig noto-fonts >/dev/null \
+ && pacman -Scc --disable-sandbox --noconfirm >/dev/null
+ENV QT_QPA_PLATFORM=offscreen
