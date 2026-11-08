@@ -21,6 +21,8 @@ Rectangle {
     // backend when the app is opened again.
     function unloading() {
         cleanUpForClose()
+        // forget cookies: sites can't recognise you the next time
+        try { send(reqClosed, {}) } catch (e) {}
     }
     // No text field may keep the keyboard and no timer may fire into a
     // half-destroyed app.
@@ -53,8 +55,9 @@ Rectangle {
     readonly property int reqReload: 11
     readonly property int reqCancel: 12
     readonly property int reqViewport: 13
+    readonly property int reqClosed: 14
 
-    property var appState: ({ settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false, greyImages: false },
+    property var appState: ({ settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false, greyImages: false, allowHTTP: false },
                               history: [], canBack: false, canForward: false, sandbox: "", version: "" })
     readonly property var settings: appState.settings || {}
     property string view: "home"        // home | page | search | error
@@ -1018,13 +1021,20 @@ Rectangle {
                 EButton { text: "Moderate"; active: settings.safeSearch === "moderate"; onClicked: send(reqSettings, { safeSearch: "moderate" }) }
                 EButton { text: "Off"; active: settings.safeSearch === "off"; onClicked: send(reqSettings, { safeSearch: "off" }) }
             }
+            Text { text: "Insecure pages (http://)"; font.pixelSize: 30; font.bold: true }
+            RowLayout {
+                spacing: 16
+                EButton { text: "Block"; active: !settings.allowHTTP; onClicked: send(reqSettings, { allowHTTP: false }) }
+                EButton { text: "Allow"; active: !!settings.allowHTTP; onClicked: send(reqSettings, { allowHTTP: true }) }
+            }
             Text { text: "Privacy"; font.pixelSize: 30; font.bold: true }
             EButton { text: "Clear browsing data"; onClicked: panel = "confirm" }
             Text {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 font.pixelSize: 22; color: "#444"
-                text: "Cookies are kept in memory only, never on the tablet. No JavaScript is ever run. "
+                text: "Cookies are kept in memory only, never on the tablet, and forgotten when you close the browser. "
+                      + "Tracking pixels and ads are never downloaded. No JavaScript is ever run. "
                       + "Pages are loaded by a sandboxed helper ("
                       + (appState.sandbox || "starting") + ") that cannot start programs, see your notebooks or reach your local network."
             }

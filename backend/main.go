@@ -36,6 +36,7 @@ const (
 	reqReload     = 11 // load the current entry again, bypassing the cache
 	reqCancel     = 12 // stop loading
 	reqViewport   = 13 // {width, height}
+	reqClosed     = 14 // the app was closed: forget cookies and connections
 )
 
 // Message types backend -> frontend.
@@ -56,6 +57,7 @@ type Settings struct {
 	SafeSearch string `json:"safeSearch"` // moderate | strict | off
 	NoImages   bool   `json:"noImages"`
 	GreyImages bool   `json:"greyImages"` // default: colour
+	AllowHTTP  bool   `json:"allowHTTP"`  // default: HTTPS only
 }
 
 // Entry is one step in the tab's history.
@@ -249,6 +251,7 @@ func (a *App) loadConfig() {
 	if a.cfg.Pos < 0 || a.cfg.Pos >= len(a.cfg.Stack) {
 		a.cfg.Pos = len(a.cfg.Stack) - 1
 	}
+	allowHTTP.Store(s.AllowHTTP)
 }
 
 // saveLocked writes the config; a.mu must be held.
@@ -347,6 +350,7 @@ func (a *App) handle(typ int, contents string) {
 		SafeSearch *string `json:"safeSearch"`
 		NoImages   *bool   `json:"noImages"`
 		GreyImages *bool   `json:"greyImages"`
+		AllowHTTP  *bool   `json:"allowHTTP"`
 	}
 	if contents != "" {
 		if err := json.Unmarshal([]byte(contents), &req); err != nil {
@@ -364,6 +368,7 @@ func (a *App) handle(typ int, contents string) {
 			a.mu.Unlock()
 		}
 		if typ == reqInit {
+			a.newSession() // in case the frontend went away without saying so
 			a.sendState()
 			a.showCurrent(false)
 		} else if e, ok := a.current(); changed && ok && e.Kind == "page" {
@@ -410,6 +415,13 @@ func (a *App) handle(typ int, contents string) {
 		a.mu.Unlock()
 	case reqClearData:
 		a.clearData()
+	case reqClosed:
+		a.mu.Lock()
+		if a.loadCancel != nil {
+			a.loadCancel()
+		}
+		a.mu.Unlock()
+		a.newSession()
 	case reqSettings:
 		a.mu.Lock()
 		s := &a.cfg.Settings
@@ -433,9 +445,20 @@ func (a *App) handle(typ int, contents string) {
 			s.GreyImages = *req.GreyImages
 			imagesChanged = true
 		}
+		reload := false
+		if req.AllowHTTP != nil && *req.AllowHTTP != s.AllowHTTP {
+			s.AllowHTTP = *req.AllowHTTP
+			allowHTTP.Store(s.AllowHTTP)
+			reload = true
+		}
 		a.saveLocked()
 		a.mu.Unlock()
 		a.sendState()
+		if reload {
+			a.mu.Lock() // pages were built under the other rule
+			a.cache, a.cacheKeys = map[string]*cachedPage{}, nil
+			a.mu.Unlock()
+		}
 		if imagesChanged {
 			a.showCurrent(false)
 		}
@@ -594,7 +617,12 @@ func (a *App) loadPage(ctx context.Context, gen int, e Entry, reload bool) {
 			return
 		}
 		a.busy(true, "Loading "+u.Hostname()+" …")
-		req, err := newRequest(ctx, http.MethodGet, e.URL, nil)
+		target := e.URL
+		upgraded := false
+		if u.Scheme == "http" && !allowHTTP.Load() {
+			target, upgraded = httpsURL(e.URL), true // HTTPS-only: try the secure version
+		}
+		req, err := newRequest(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			a.sendError(err, false)
 			return
@@ -604,7 +632,12 @@ func (a *App) loadPage(ctx context.Context, gen int, e Entry, reload bool) {
 			return
 		}
 		if err != nil {
-			a.sendError(err, true)
+			if upgraded && !errors.Is(err, context.Canceled) && !errors.Is(err, errLocalNetwork) {
+				log.Printf("https upgrade of %s: %v", u.Hostname(), err)
+				a.sendError(errInsecure, false)
+				return
+			}
+			a.sendError(err, !errors.Is(err, errInsecure))
 			return
 		}
 		var imgs ImageFunc
@@ -670,6 +703,19 @@ func (a *App) suggest(q string) {
 		}
 		a.send(resSuggest, map[string]any{"q": q, "items": items})
 	}()
+}
+
+// newSession forgets cookies and open connections; it runs when the app
+// is opened and closed, so sites can't recognise the tablet from one use
+// of the browser to the next (AppLoad keeps the backend running).
+func (a *App) newSession() {
+	a.mu.Lock()
+	old := a.http
+	a.http = newHTTPClient()
+	a.mu.Unlock()
+	if t, ok := old.Transport.(*http.Transport); ok {
+		t.CloseIdleConnections()
+	}
 }
 
 // clearData forgets everything the browser stored: history, the tab's

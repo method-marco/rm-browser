@@ -268,6 +268,9 @@ func (w *qtWriter) imageSource(n *html.Node) string {
 	if strings.HasSuffix(strings.ToLower(u.Path), ".svg") {
 		return ""
 	}
+	if isTrackerImage(n, u.String()) {
+		return "" // not even downloaded
+	}
 	return u.String()
 }
 

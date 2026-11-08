@@ -46,6 +46,9 @@ func (a *App) prepareImage(ctx context.Context, src string, maxW, maxH int, grey
 
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	if !allowHTTP.Load() {
+		src = httpsURL(src) // HTTPS-only: an insecure image is tried securely or not at all
+	}
 	req, err := newRequest(ctx, http.MethodGet, src, nil)
 	if err != nil {
 		return "", 0, 0, false

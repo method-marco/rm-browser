@@ -18,6 +18,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,7 +35,8 @@ const (
 )
 
 // newHTTPClient returns a client with a fresh, in-memory cookie jar.
-// Cookies are never written to disk; "Clear browsing data" replaces the jar.
+// Cookies are never written to disk; the jar is replaced when the app is
+// opened or closed and by "Clear browsing data".
 func newHTTPClient() *http.Client {
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	tr := &http.Transport{
@@ -58,9 +60,27 @@ func newHTTPClient() *http.Client {
 			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 				return fmt.Errorf("redirect to unsupported address %q", req.URL.Scheme+":")
 			}
+			if req.URL.Scheme == "http" && !allowHTTP.Load() {
+				return errInsecure
+			}
 			return nil
 		},
 	}
+}
+
+// allowHTTP: plain http:// is refused unless the user allows it in
+// Settings (HTTPS-only mode, the default). It is checked for every
+// request, so a redirect from https to http is refused too.
+var allowHTTP atomic.Bool
+
+var errInsecure = errors.New("this site has no secure (https) version, so it was not opened. To open it anyway, allow insecure pages in Settings")
+
+// httpsURL returns u with http:// replaced by https://.
+func httpsURL(u string) string {
+	if len(u) > 7 && strings.EqualFold(u[:7], "http://") {
+		return "https://" + u[7:]
+	}
+	return u
 }
 
 // allowLocalForTests lets tests talk to their local web server.
@@ -143,6 +163,9 @@ func fetch(ctx context.Context, c *http.Client, req *http.Request, limit int64) 
 	if s := req.URL.Scheme; s != "http" && s != "https" {
 		return nil, fmt.Errorf("unsupported address %q", s+":")
 	}
+	if req.URL.Scheme == "http" && !allowHTTP.Load() {
+		return nil, errInsecure
+	}
 	resp, err := c.Do(req)
 	if err != nil {
 		return nil, friendlyError(err)
@@ -185,6 +208,8 @@ func friendlyError(err error) error {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return err
+	case errors.Is(err, errInsecure):
+		return errInsecure
 	case errors.Is(err, errLocalNetwork):
 		return errLocalNetwork
 	case errors.As(err, &cert):

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -15,8 +16,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 func TestClassifyInput(t *testing.T) {
@@ -316,6 +320,8 @@ func TestAppFlow(t *testing.T) {
 		}
 		return nil
 	}
+	a.handle(reqSettings, `{"allowHTTP":true}`) // the test server speaks plain http
+	defer allowHTTP.Store(false)
 	a.handle(reqOpen, `{"input":"`+srv.URL+`/one"}`)
 	p := wait(resPage).(map[string]any)["page"].(*Page)
 	if !strings.HasPrefix(p.Title, "Title of /one") {
@@ -340,6 +346,16 @@ func TestAppFlow(t *testing.T) {
 	if len(a.cfg.History) != 2 {
 		t.Fatalf("history %v", a.cfg.History)
 	}
+	// closing the app forgets cookies, but nothing else
+	a.handle(reqClosed, ``)
+	if len(a.client().Jar.Cookies(u)) != 0 {
+		t.Fatal("cookies survived closing the app")
+	}
+	if len(a.cfg.History) != 2 {
+		t.Fatal("closing the app must keep the history")
+	}
+	a.handle(reqOpen, `{"input":"`+srv.URL+`/one"}`)
+	wait(resPage)
 	_ = store.cache.WriteFile("img-test", []byte("x"), 0o644)
 
 	a.handle(reqClearData, ``)
@@ -420,6 +436,8 @@ func TestCardListsAndBlockLinks(t *testing.T) {
 }
 
 func TestNoLocalNetwork(t *testing.T) {
+	allowHTTP.Store(true) // check the connection rules, not HTTPS-only
+	defer allowHTTP.Store(false)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("secret")) }))
 	defer srv.Close()
 	c := newHTTPClient()
@@ -463,5 +481,105 @@ func TestPruneImages(t *testing.T) {
 	left, _ := os.ReadDir(filepath.Join(dir, "cache", "img"))
 	if len(left) != 5 || left[0].Name() != "5.jpg" {
 		t.Errorf("left: %v", left)
+	}
+}
+
+// HTTPS-only (the default): http:// addresses are tried as https://, and
+// refused when the site has no secure version; redirects to http too.
+func TestHTTPSOnly(t *testing.T) {
+	allowLocalForTests = true
+	defer func() { allowLocalForTests = false }()
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(articleHTML))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	store, err := openStore(filepath.Join(dir, "cfg"), filepath.Join(dir, "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := make(chan [2]any, 100)
+	a := newApp(nil, store)
+	a.sendHook = func(typ int, v any) { sent <- [2]any{typ, v} }
+	if allowHTTP.Load() {
+		t.Fatal("HTTPS-only must be the default")
+	}
+	a.handle(reqOpen, `{"input":"`+srv.URL+`/page"}`)
+	for m := range sent {
+		if m[0].(int) == resPage {
+			t.Fatal("insecure page was shown")
+		}
+		if m[0].(int) == resError {
+			if msg := m[1].(map[string]any)["message"].(string); !strings.Contains(msg, "no secure (https) version") {
+				t.Fatalf("error %q", msg)
+			}
+			break
+		}
+	}
+	if hits != 0 {
+		t.Errorf("the plain http server got %d requests", hits)
+	}
+	req, _ := newRequest(context.Background(), http.MethodGet, srv.URL, nil)
+	if _, err := fetch(context.Background(), newHTTPClient(), req, 1<<20); !errors.Is(err, errInsecure) {
+		t.Errorf("fetch http: %v", err)
+	}
+	c := newHTTPClient()
+	if err := c.CheckRedirect(req, []*http.Request{req}); !errors.Is(err, errInsecure) {
+		t.Errorf("redirect to http allowed: %v", err)
+	}
+	if got := httpsURL("HTTP://road.cc/x"); got != "https://road.cc/x" {
+		t.Errorf("httpsURL: %s", got)
+	}
+}
+
+func TestTrackerImages(t *testing.T) {
+	doc, _ := html.Parse(strings.NewReader(`<img id="a" width="1" height="1"><img id="b" width="600"><img id="c">`))
+	imgs := map[string]*html.Node{}
+	walk(doc, func(n *html.Node) bool {
+		if n.Type == html.ElementNode && n.Data == "img" {
+			imgs[attr(n, "id")] = n
+		}
+		return true
+	})
+	for _, c := range []struct {
+		n      string
+		src    string
+		tracks bool
+	}{
+		{"a", "https://example.com/photo.jpg", true}, // declared 1x1
+		{"b", "https://example.com/photo.jpg", false},
+		{"c", "https://www.facebook.com/tr?id=1&ev=PageView", true},
+		{"c", "https://sb.scorecardresearch.com/p?c1=2", true},
+		{"c", "https://pixel.example.com/v.gif", true},
+		{"c", "https://example.com/img/spacer.gif", true},
+		{"c", "https://images.taboola.com/x.jpg", true},
+		{"c", "https://cdn.road.cc/sites/default/files/photo.jpg", false},
+		{"c", "https://scontent.fbcdn.net/photo.jpg", false},
+		{"c", "https://notfacebook.com/photo.jpg", false},
+		{"c", "https://upload.wikimedia.org/wikipedia/commons/a/ab/Photo.jpg", false},
+	} {
+		if got := isTrackerImage(imgs[c.n], c.src); got != c.tracks {
+			t.Errorf("%s %s: tracker=%v, want %v", c.n, c.src, got, c.tracks)
+		}
+	}
+	// and they are never requested
+	u, _ := url.Parse("https://example.com/")
+	src := `<html><body><article><h1>Title</h1><p>` + filler + `</p><img src="https://example.com/real.jpg">
+<img src="https://www.google-analytics.com/collect?v=1"><img src="/t.gif" width="1" height="1"><p>` + filler + `</p></article></body></html>`
+	var asked []string
+	var mu sync.Mutex
+	imgFn := func(ctx context.Context, s string) (string, int, int, bool) {
+		mu.Lock()
+		asked = append(asked, s)
+		mu.Unlock()
+		return "/c/x.jpg", 400, 300, true
+	}
+	if _, err := buildPage(context.Background(), &Fetched{URL: u, ContentType: "text/html", Body: []byte(src)}, imgFn, 842); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || asked[0] != "https://example.com/real.jpg" {
+		t.Errorf("requested %v", asked)
 	}
 }

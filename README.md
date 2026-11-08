@@ -24,8 +24,7 @@ An [AppLoad](https://github.com/asivery/rm-appload) app for reMarkable tablets: 
 - **Clear browsing data:** one button (home screen, menu, Settings) deletes history and searches,
   the back/forward list, cookies, and cached pages and images. Settings stay
 - Settings: text size, font (Noto Sans or EB Garamond, the tablet's own fonts), images on/off,
-  colour or grey,
-  safe search
+  colour or grey, safe search, insecure (`http://`) pages blocked or allowed
 - Images in colour (for the Paper Pro's colour screen) or grey scale (Settings), sized to fit
   the screen; e-ink-friendly UI (black/white,
   no animations, large touch targets); always full screen
@@ -39,11 +38,12 @@ website sends:
   available to AppLoad apps; it would also be the opposite of distraction-free.)
 - **HTTPS** with Go's TLS stack: certificates verified (system roots, or Mozilla's root store built
   into the app via `golang.org/x/crypto/x509roots/fallback`), TLS 1.2+ only. Invalid certificates
-  are refused. Plain `http://` pages are marked *not secure*
+  are refused. **HTTPS-only** by default: `http://` addresses (typed, linked or redirected to) are
+  opened as `https://`; sites without a secure version are refused unless you allow insecure pages in
+  Settings (they are then marked *not secure*)
 - HTML is cleaned by Readability and then by [bluemonday](https://github.com/microcosm-cc/bluemonday)
   (strict allowlist; links only `http`/`https`). The app then writes its own, minimal rich text
   from that, with all page text escaped
-- **Cookies live in memory only**, never on the tablet; *Clear browsing data* throws them away
 
 ### Sandbox
 
@@ -78,6 +78,21 @@ files, so the frontend (in xochitl, which runs as root) never opens anything a w
 frontend checks again that images come only from the backend's image folder and links are only
 `http(s)`. The image cache is capped at 150 MB. If the sandbox can't be set up, the browser refuses
 to run. *Settings* shows the active layers.
+
+## Privacy
+
+- **No trackers run:** without JavaScript there are no analytics scripts, fingerprinting or ads
+- **Tracking pixels and ad images are never downloaded:** images declared tiny (`width="1"`),
+  from ~90 ad/analytics domains (Google ads and analytics, Facebook pixel, Taboola, Outbrain, …) or
+  with typical pixel names (`spacer.gif`, …) are skipped before any request
+- **Cookies live in memory only**, never on the tablet, and are **forgotten when you close the
+  browser**, so sites can't recognise you from one use to the next. *Clear browsing data* throws
+  away everything else too
+- DuckDuckGo's result links are unwrapped, so DuckDuckGo doesn't see which result you open; no
+  Referer is sent when opening a page; a common Firefox user agent
+- No telemetry. History and the image cache stay on the tablet until you clear them
+- Not covered: DNS lookups are not encrypted (your router and provider see which sites, not which
+  pages), and autocomplete sends what you type to DuckDuckGo
 
 ## Limits
 
@@ -146,7 +161,8 @@ backend/               Go backend -> backend/entry (static, no cgo)
   appload.go           AppLoad socket protocol
   sandbox_linux.go     privilege drop, Landlock, seccomp
   store.go             config and cache folders (os.Root)
-  fetch.go             HTTP client, address-or-search detection
+  fetch.go             HTTP client, HTTPS-only, address-or-search detection
+  trackers.go          tracking pixel and ad image filter
   ddg.go               DuckDuckGo search and autocomplete
   reader.go            Readability + bluemonday + Qt rich text writer
   images.go            image download, re-encoding, resizing, optional grey scale
