@@ -11,11 +11,14 @@ package main
 // same fonts (Noto Sans or EB Garamond, embedded) and size. Pictures are
 // the JPEGs the reader shows. Headings become the PDF's outline.
 //
-// The PDF is written through a file descriptor opened as root before the
-// sandbox starts, in a root-owned folder in RAM (/run/rm-browser-export):
-// the frontend hands exactly that file to rm-librarian, which copies it
-// into the library folder "Web". The sandbox can't create, replace or
-// link files there, so it can't make root import anything else.
+// The PDF is written under its document name ("Title (2).pdf": librarian
+// names the document after the file; renaming afterwards would deadlock
+// xochitl) into /run/rm-browser-export, a sticky world-writable folder in
+// RAM like /tmp, and deleted right after the import. The frontend (root)
+// only imports exactly the name it asked for, and the kernel's
+// protected_symlinks/protected_hardlinks (checked at start) stop root
+// from following a link the sandbox might plant there, so a hijacked
+// backend still can't make root import another file.
 
 import (
 	"bytes"
@@ -29,9 +32,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"codeberg.org/go-pdf/fpdf"
 	"golang.org/x/net/html"
@@ -39,7 +42,6 @@ import (
 )
 
 const (
-	exportPDFName  = "Web page.pdf" // librarian names the document after it; renamed afterwards
 	maxExportPages = 1000
 	maxExportLines = 50000
 	maxPageSide    = 6000     // PDF page size limit (pixels = points)
@@ -48,8 +50,9 @@ const (
 
 // Export is the backend's side of the export folder.
 type Export struct {
-	dir string   // absolute path, for the frontend
-	pdf *os.File // the PDF, root-owned, opened before the sandbox
+	dir     string   // absolute path, for the frontend
+	root    *os.Root // opened before the sandbox
+	current string   // file of the export in progress
 }
 
 func exportDirPath() string {
@@ -59,10 +62,18 @@ func exportDirPath() string {
 	return "/run/rm-browser-export"
 }
 
-// openExport prepares the folder and the PDF file; as root both stay
-// root's (folder 0755, file 0600) and are only used through the
-// descriptor.
+// linkProtection: root must never follow links or hard links that the
+// sandbox user made in the shared folder.
+var linkProtection = []string{"/proc/sys/fs/protected_symlinks", "/proc/sys/fs/protected_hardlinks"}
+
+// openExport prepares the folder (owned by root, sticky, writable for the
+// sandbox) and removes what an earlier run left behind.
 func openExport(dir string) (*Export, error) {
+	for _, f := range linkProtection {
+		if b, err := os.ReadFile(f); err != nil || strings.TrimSpace(string(b)) == "0" {
+			return nil, fmt.Errorf("%s is off", filepath.Base(f))
+		}
+	}
 	if fi, err := os.Lstat(dir); err == nil && !fi.IsDir() {
 		return nil, fmt.Errorf("%s is not a folder", dir)
 	}
@@ -74,52 +85,89 @@ func openExport(dir string) (*Export, error) {
 			return nil, err
 		}
 	}
-	if err := os.Chmod(dir, 0o755); err != nil {
+	if err := os.Chmod(dir, 0o777|os.ModeSticky); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, exportPDFName), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, err
 	}
-	if os.Geteuid() == 0 {
-		if err := f.Chown(0, 0); err != nil {
-			f.Close()
-			return nil, err
-		}
-	}
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		return nil, err
-	}
-	_ = f.Truncate(0)
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		abs = dir
 	}
-	return &Export{dir: abs, pdf: f}, nil
+	e := &Export{dir: abs, root: root}
+	e.removeAll()
+	return e, nil
 }
 
-func (e *Export) pdfPath() string { return filepath.Join(e.dir, exportPDFName) }
+func (e *Export) removeAll() {
+	d, err := e.root.Open(".")
+	if err != nil {
+		return
+	}
+	names, _ := d.Readdirnames(-1)
+	d.Close()
+	for _, n := range names {
+		_ = e.root.Remove(n)
+	}
+}
 
-// clear empties the PDF once it is in the library (or saving failed).
-func (e *Export) clear() error { return e.pdf.Truncate(0) }
+// path is the absolute path of a document's export file.
+func (e *Export) path(name string) string { return filepath.Join(e.dir, name+".pdf") }
 
-// write replaces the PDF's contents.
-func (e *Export) write(b []byte) error {
+// clear deletes the export file once it is in the library (or saving
+// failed).
+func (e *Export) clear() {
+	if e.current != "" {
+		_ = e.root.Remove(e.current)
+		e.current = ""
+	}
+}
+
+// write stores the PDF as "<name>.pdf".
+func (e *Export) write(name string, b []byte) error {
+	if err := checkDocName(name); err != nil {
+		return err
+	}
 	if len(b) > maxExportPDF {
 		return errors.New("the PDF would be too large")
 	}
-	if _, err := e.pdf.Seek(0, io.SeekStart); err != nil {
+	e.clear()
+	file := name + ".pdf"
+	_ = e.root.Remove(file) // a leftover (or something planted): never written through
+	f, err := e.root.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
 		return err
 	}
-	if _, err := e.pdf.Write(b); err != nil {
+	e.current = file
+	if _, err := f.Write(b); err != nil {
+		f.Close()
 		return err
 	}
-	return e.pdf.Truncate(int64(len(b)))
+	return f.Close()
+}
+
+// checkDocName: the frontend picks the document name (it knows which
+// names the library already has); it must be a plain file name.
+func checkDocName(name string) error {
+	switch {
+	case name == "" || len(name) > 200 || strings.HasPrefix(name, ".") || strings.TrimSpace(name) != name:
+		return errors.New("bad document name")
+	case strings.ContainsAny(name, "/\\"):
+		return errors.New("bad document name")
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' || r == utf8.RuneError {
+			return errors.New("bad document name")
+		}
+	}
+	return nil
 }
 
 // ExportRequest is the reader's layout of the current page.
 type ExportRequest struct {
+	Name        string    `json:"name"` // document name, also the file name
 	URL         string    `json:"url"`
 	FontSize    float64   `json:"fontSize"`
 	Serif       bool      `json:"serif"`
@@ -134,6 +182,8 @@ type ExportRequest struct {
 
 func (r *ExportRequest) check() error {
 	switch {
+	case checkDocName(r.Name) != nil:
+		return errors.New("bad document name")
 	case r.Width < 100 || r.Height < 100 || r.Width > maxPageSide || r.Height > maxPageSide:
 		return errors.New("bad page size")
 	case r.FontSize < 10 || r.FontSize > 100:
@@ -614,28 +664,4 @@ func buildPDF(w io.Writer, p *Page, req ExportRequest, readImage ImageReader) (e
 		}
 	}
 	return pdf.Output(w)
-}
-
-// cleanTitle makes a page title usable as a document name: one line, no
-// "/" (a path separator for librarian) or "," (its argument separator).
-func cleanTitle(s string) string {
-	s = strings.Map(func(r rune) rune {
-		switch {
-		case r == '/' || r == '\\':
-			return '-'
-		case r == ',':
-			return '‚' // U+201A, looks like a comma
-		case unicode.IsControl(r) || r == ' ' || r == ' ':
-			return ' '
-		}
-		return r
-	}, s)
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > 120 {
-		s = strings.TrimSpace(string(r[:120])) + "…"
-	}
-	if s == "" {
-		s = "Web page"
-	}
-	return s
 }

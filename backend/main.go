@@ -143,14 +143,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// The export folder (Save as PDF) stays root's: the PDF is opened now
-	// and only written through its descriptor.
+	// The export folder (Save as PDF) is shared with root, see export.go.
 	export, err := openExport(exportDirPath())
+	var shared []string
 	if err != nil {
 		log.Printf("export folder: %v (Save as PDF is off)", err)
 		export = nil
+	} else {
+		shared = append(shared, export.dir)
 	}
-	sandbox, err := enterSandbox(jailDir(cacheDir), cfgDir, cacheDir)
+	sandbox, err := enterSandbox(jailDir(cacheDir), shared, cfgDir, cacheDir)
 	if err != nil {
 		// Never browse unsandboxed.
 		log.Printf("sandbox: %v", err)
@@ -440,7 +442,7 @@ func (a *App) handle(typ int, contents string) {
 		a.savePDF(er)
 	case reqExported:
 		if a.export != nil {
-			_ = a.export.clear()
+			a.export.clear()
 		}
 	case reqClosed:
 		a.mu.Lock()
@@ -757,17 +759,19 @@ func (a *App) savePDF(er ExportRequest) {
 		return
 	}
 	go func() {
+		t0 := time.Now()
 		var buf bytes.Buffer
 		err := buildPDF(&buf, p, er, a.readImage)
 		if err == nil {
-			err = a.export.write(buf.Bytes())
+			err = a.export.write(er.Name, buf.Bytes())
 		}
 		if err != nil {
 			log.Printf("pdf: %v", err)
 			fail("Could not make the PDF: " + err.Error())
 			return
 		}
-		a.send(resPDF, map[string]any{"path": a.export.pdfPath(), "title": cleanTitle(p.Title)})
+		log.Printf("pdf: %d pages, %d lines, %d KB in %v", len(er.PageStarts), len(er.Lines)/4, buf.Len()>>10, time.Since(t0).Round(time.Millisecond))
+		a.send(resPDF, map[string]any{"path": a.export.path(er.Name), "name": er.Name})
 	}()
 }
 
@@ -817,7 +821,7 @@ func (a *App) clearData() {
 		t.CloseIdleConnections()
 	}
 	if a.export != nil {
-		_ = a.export.clear()
+		a.export.clear()
 	}
 	err := a.store.clearCache()
 	a.busy(false, "")

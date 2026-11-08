@@ -263,6 +263,7 @@ Item {
             tryVerify(function () { return Bus.lastOf(15) !== null }, 5000, "layout sent")
             const req = Bus.lastOf(15)
             compare(req.url, "https://example.com/story")
+            compare(req.name, expectName)
             compare(req.width, win.width); compare(req.height, win.height)
             compare(req.x, 56); compare(req.y, 48)
             compare(req.fontSize, 32)
@@ -280,10 +281,11 @@ Item {
             verify(ordered, "lines in reading order")
             compare(app.pageIndex, 2, "still on the same page")
             shot("pdf-saving")
-            Bus.deliver(109, { path: outDir + "export/Web page.pdf", title: "A Long Test Story" })
+            Bus.deliver(109, { path: outDir + "export/" + expectName + ".pdf", name: expectName })
             verify(!app.exporting && app.exportStatus === "", app.exportStatus)
             compare(Library.docs[Library.docs.length - 1], expectName)
-            compare(Library.imported[Library.imported.length - 1], outDir + "export/Web page.pdf")
+            compare(Library.imported[Library.imported.length - 1], outDir + "export/" + expectName + ".pdf")
+            verify(!Library.renamed, "renameEntry deadlocks xochitl")
             verify(app.toast.indexOf("Saved to Web: " + expectName) === 0, app.toast)
             verify(Bus.lastOf(16) !== null, "export file emptied")
         }
@@ -298,14 +300,14 @@ Item {
 
             // answers nobody asked for are ignored
             const calls = Library.calls.length
-            Bus.deliver(109, { path: outDir + "export/Web page.pdf", title: "Injected" })
+            Bus.deliver(109, { path: outDir + "export/Injected.pdf", name: "Injected" })
             compare(Library.calls.length, calls)
 
             // a path other than the export file is refused
             app.menuOpen = true; wait(50); Bus.clear()
             tapButton("Save as PDF")
             tryVerify(function () { return Bus.lastOf(15) !== null }, 20000)
-            Bus.deliver(109, { path: "/home/root/.ssh/id_rsa", title: "x" })
+            Bus.deliver(109, { path: "/home/root/.ssh/id_rsa", name: app.exportName })
             verify(app.exportStatus.indexOf("Could not save") === 0, app.exportStatus)
             compare(Library.imported.length, 2)
             tapButton("OK")

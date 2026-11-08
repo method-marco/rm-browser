@@ -7,7 +7,8 @@ QtObject {
     property var calls: []        // [signal, message]
     property var docs: []         // names in "Web"
     property var imported: []     // file paths imported
-    function reset() { calls = []; docs = []; imported = []; installed = true }
+    property bool renamed: false  // renameEntry was called (must never be)
+    function reset() { calls = []; docs = []; imported = []; installed = true; renamed = false }
     function handle(signal, message) {
         calls = calls.concat([[signal, message]])
         if (!installed) return ""
@@ -20,11 +21,13 @@ QtObject {
         case "importDocument": {
             const i = message.lastIndexOf(",")
             if (message.slice(i + 1) !== "folder-web-uuid") return "ERROR: bad folder"
-            imported = imported.concat([message.slice(0, i)])
-            docs = docs.concat(["Web page"])
+            const path = message.slice(0, i)
+            imported = imported.concat([path])
+            docs = docs.concat([path.slice(path.lastIndexOf("/") + 1).replace(/\.pdf$/, "")])
             return "new-doc-" + (docs.length - 1)
         }
-        case "renameEntry": {
+        case "renameEntry": {   // would deadlock xochitl from the UI thread
+            renamed = true
             const i = message.lastIndexOf(",")
             const idx = parseInt(message.slice(0, i).replace("new-doc-", ""))
             const d = docs.slice(); d[idx] = message.slice(i + 1); docs = d

@@ -85,9 +85,10 @@ var jailFiles = []string{"/etc/resolv.conf", "/etc/hosts"}
 
 // enterSandbox applies all layers. jail is an empty folder to chroot into
 // (created, owned by root); dirs are the data folders, already opened as
-// os.Root and handed to the sandbox user. It returns a short description
-// of the active layers.
-func enterSandbox(jail string, dirs ...string) (string, error) {
+// os.Root and handed to the sandbox user; shared are folders opened
+// before that keep their owner (Landlock allows writing them). It returns
+// a short description of the active layers.
+func enterSandbox(jail string, shared []string, dirs ...string) (string, error) {
 	var layers []string
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -119,7 +120,7 @@ func enterSandbox(jail string, dirs ...string) (string, error) {
 	if useLandlock {
 		if err := landlock.V11.BestEffort().Restrict(
 			landlock.RODirs(ro...).IgnoreIfMissing(),
-			landlock.RWDirs(dirs...),
+			landlock.RWDirs(append(append([]string{}, dirs...), shared...)...),
 			landlock.ConnectTCP(80), landlock.ConnectTCP(443), landlock.ConnectTCP(8080), landlock.ConnectTCP(8443),
 			landlock.ConnectTCP(53), landlock.BindUDP(0), landlock.ConnectSendUDP(53),
 		); err != nil {

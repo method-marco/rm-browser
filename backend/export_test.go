@@ -75,7 +75,7 @@ func TestBuildPDF(t *testing.T) {
 		6, 600, 52, 0, // Deeper
 		6, 664, 44, 0, // End € 𝒜.
 	}
-	req := ExportRequest{URL: "https://example.com/a", FontSize: 32, Width: 954, Height: 1696, X: 56, Y: 48,
+	req := ExportRequest{Name: "Bikes, tyres", URL: "https://example.com/a", FontSize: 32, Width: 954, Height: 1696, X: 56, Y: 48,
 		Lines: lines, PageStarts: []float64{0, 476}, PageHeights: []float64{476, 300}}
 	var buf bytes.Buffer
 	if err := buildPDF(&buf, testPage(), req, read); err != nil {
@@ -121,48 +121,50 @@ func TestBuildPDF(t *testing.T) {
 
 func TestExportFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "export")
+	_ = os.MkdirAll(dir, 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "old.pdf"), []byte("x"), 0o644)
 	e, err := openExport(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi, _ := os.Stat(e.pdfPath()); fi.Mode().Perm() != 0o600 {
-		t.Errorf("pdf mode %v", fi.Mode())
+	if fi, _ := os.Stat(dir); fi.Mode()&os.ModeSticky == 0 || fi.Mode().Perm() != 0o777 {
+		t.Errorf("folder mode %v", fi.Mode())
 	}
-	if err := e.write([]byte("%PDF-long-content")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "old.pdf")); err == nil {
+		t.Error("leftover not removed")
+	}
+	if err := e.write("Bikes, tyres – Über (2)", []byte("%PDF-x")); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.write([]byte("%PDF-x")); err != nil {
+	if b, _ := os.ReadFile(e.path("Bikes, tyres – Über (2)")); string(b) != "%PDF-x" {
+		t.Errorf("written %q", b)
+	}
+	// a planted file or link under the name is replaced, never written through
+	target := filepath.Join(t.TempDir(), "target")
+	_ = os.WriteFile(target, []byte("keep"), 0o644)
+	_ = os.Symlink(target, filepath.Join(dir, "Next.pdf"))
+	if err := e.write("Next", []byte("%PDF-y")); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(e.pdfPath()); string(b) != "%PDF-x" {
-		t.Errorf("rewrite left %q", b)
+	if b, _ := os.ReadFile(target); string(b) != "keep" {
+		t.Error("wrote through a link")
 	}
-	if err := e.clear(); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(e.path("Bikes, tyres – Über (2)")); err == nil {
+		t.Error("previous export not removed")
 	}
-	if fi, _ := os.Stat(e.pdfPath()); fi.Size() != 0 {
-		t.Error("not emptied")
+	e.clear()
+	if _, err := os.Lstat(e.path("Next")); err == nil {
+		t.Error("export not removed")
 	}
-	// a link in place of the folder is refused
-	l := filepath.Join(t.TempDir(), "link")
-	_ = os.Symlink(t.TempDir(), l)
-	if _, err := openExport(filepath.Join(l)); err == nil {
-		t.Error("followed a link for the export folder")
-	}
-}
-
-func TestCleanTitle(t *testing.T) {
-	for in, want := range map[string]string{
-		"Apple, Google/Meta\n news": "Apple‚ Google-Meta news",
-		"  ":                        "Web page",
-		"a\\b":                      "a-b",
-	} {
-		if got := cleanTitle(in); got != want {
-			t.Errorf("cleanTitle(%q) = %q, want %q", in, got, want)
+	for _, bad := range []string{"", "../x", "a/b", ".hidden", " pad", "a\nb", "a\\b", strings.Repeat("x", 201)} {
+		if e.write(bad, []byte("x")) == nil {
+			t.Errorf("name %q accepted", bad)
 		}
 	}
-	if long := cleanTitle(strings.Repeat("x", 300)); len([]rune(long)) != 121 {
-		t.Errorf("long title: %d runes", len([]rune(long)))
+	l := filepath.Join(t.TempDir(), "link")
+	_ = os.Symlink(t.TempDir(), l)
+	if _, err := openExport(l); err == nil {
+		t.Error("followed a link for the export folder")
 	}
 }
 

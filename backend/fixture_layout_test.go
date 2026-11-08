@@ -35,6 +35,7 @@ func TestFixtureLayouts(t *testing.T) {
 		if err := json.Unmarshal(lb, &req); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
+		req.Name = "Fixture"
 		read := func(path string) ([]byte, error) {
 			return os.ReadFile(filepath.Join(dir, "cache", strings.TrimPrefix(path, "/repo/build/fixture/cache/")))
 		}

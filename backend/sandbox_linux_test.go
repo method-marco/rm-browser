@@ -55,7 +55,7 @@ func sandboxChild() {
 	if err != nil {
 		fail("openExport: %v", err)
 	}
-	layers, err := enterSandbox(jail, cfg, cache)
+	layers, err := enterSandbox(jail, []string{export.dir}, cfg, cache)
 	if err != nil {
 		fail("enterSandbox: %v", err)
 	}
@@ -68,21 +68,28 @@ func sandboxChild() {
 	if err := store.cache.WriteFile("x", []byte("x"), 0o644); err != nil {
 		fail("cache write: %v", err)
 	}
-	// export: the PDF is written through its descriptor; the folder
-	// itself is out of reach
-	if err := export.write([]byte("%PDF-1.3 test")); err != nil {
+	// export folder: PDFs can be written and removed; a planted link is
+	// checked by the parent (root must not follow it)
+	if err := export.write("Doc (2)", []byte("%PDF-1.3 test")); err != nil {
 		fail("pdf write: %v", err)
 	}
-	if err := export.clear(); err != nil {
-		fail("pdf truncate: %v", err)
+	if b, err := export.root.ReadFile("Doc (2).pdf"); err != nil || string(b) != "%PDF-1.3 test" {
+		fail("pdf read back: %q %v", b, err)
 	}
-	if wasRoot {
-		if err := os.WriteFile(filepath.Join(export.dir, "evil.pdf"), []byte("x"), 0o644); err == nil {
-			fail("could create a file in the export folder")
-		}
-		if err := os.Symlink("/etc/shadow", filepath.Join(export.dir, "x.pdf")); err == nil {
-			fail("could plant a link in the export folder")
-		}
+	export.clear()
+	if _, err := export.root.Stat("Doc (2).pdf"); err == nil {
+		fail("export file not removed")
+	}
+	// no links at all (symlinkat/linkat are not on the allowlist); the
+	// kernel's protected_symlinks would also stop root from following one
+	if err := export.root.Symlink(filepath.Join(outside, "secret"), "planted.pdf"); err == nil {
+		fail("could plant a link in the export folder")
+	}
+	if err := export.root.Link("Doc (2).pdf", "hard.pdf"); err == nil {
+		fail("could make a hard link in the export folder")
+	}
+	if err := export.write("../escape", []byte("x")); err == nil {
+		fail("wrote outside the export folder")
 	}
 	if _, err := os.ReadFile("/etc/resolv.conf"); err != nil {
 		fail("reading /etc/resolv.conf (DNS) failed: %v", err)

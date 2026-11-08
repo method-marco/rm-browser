@@ -204,11 +204,16 @@ Rectangle {
     // Works like printing: the PDF gets the same pages with the same lines
     // as the reader, in real text. The frontend sends how Qt laid the page
     // out (per line: visible characters, position, height; where pages
-    // start), the backend draws it with the same fonts, and rm-librarian
-    // (a xovi extension) files it in the library folder "Web". Saving
-    // again makes a new document ("Title (2)", ...), it never replaces one.
+    // start), the backend draws it with the same fonts and saves it as
+    // "<name>.pdf", and rm-librarian (a xovi extension) files it in the
+    // library folder "Web", named after the file. Saving again makes a new
+    // document ("Title (2)", ...), it never replaces one.
+    // Only librarian calls that don't wait for xochitl's main thread may be
+    // used here (ensureFolder, lookupEntry, importDocument): this code runs
+    // on it, so e.g. renameEntry would deadlock the whole tablet UI.
     property bool exporting: false
     property string exportStatus: ""     // full-screen message while saving, or an error
+    property string exportName: ""      // document name being saved
     property var librarianObj: null
     readonly property string libraryFolder: "Web"
 
@@ -229,10 +234,18 @@ Rectangle {
         if (r.indexOf("ERROR") === 0) throw new Error(r.replace(/^ERROR:?\s*/, ""))
         return r
     }
+    // A page title as document (and file) name: one line, no "/", at most
+    // 180 bytes so that " (12).pdf" still fits a file name.
     function docName(t) {
-        let n = String(t || "").replace(/[\/\\]/g, "-").replace(/,/g, "\u201a")
-                               .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim()
-        if (n.length > 121) n = n.slice(0, 120).trim() + "\u2026"
+        let n = String(t || "").replace(/[\/\\]/g, "-")
+                               .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim()
+        n = n.replace(/^\.+/, "").trim()
+        const bytes = function (x) { return unescape(encodeURIComponent(x)).length }
+        if (bytes(n) > 180) {
+            let cps = Array.from(n)
+            while (cps.length > 0 && bytes(cps.join("") + "\u2026") > 180) cps.pop()
+            n = cps.join("").trim() + "\u2026"
+        }
         return n || "Web page"
     }
     function exportFail(msg) {
@@ -244,6 +257,15 @@ Rectangle {
         if (exporting || view !== "page" || !pageData || !appState.exportDir) return
         try {
             libCall("ensureFolder", libraryFolder)   // fails early if librarian is missing
+            const base = docName(pageData.title)
+            let name = base
+            for (let k = 2; k < 1000; k++) {      // a new version, never replace
+                let exists = true
+                try { libCall("lookupEntry", libraryFolder + "/" + name) } catch (e) { exists = false }
+                if (!exists) break
+                name = base + " (" + k + ")"
+            }
+            exportName = name
         } catch (e) {
             exportStatus = "Could not save the PDF.\n\n" + e.message
             return
@@ -252,7 +274,17 @@ Rectangle {
         exportStatus = "Saving PDF \u2026"
         exportTimer.restart()    // let the message show first
     }
-    Timer { id: exportTimer; interval: 50; onTriggered: if (exporting) send(reqSavePDF, exportLayout()) }
+    Timer {
+        id: exportTimer
+        interval: 50
+        onTriggered: {
+            if (!exporting) return
+            const t0 = Date.now()
+            const req = exportLayout()
+            console.log("rm-browser: page layout read in", Date.now() - t0, "ms,", req.lines.length / 4, "lines")
+            send(reqSavePDF, req)
+        }
+    }
 
     // How Qt laid out the page: for every line on screen the number of
     // visible characters (pictures count one), its y, height and x.
@@ -274,7 +306,7 @@ Rectangle {
             }
             p = e
         }
-        return { url: pageData.url || "", fontSize: settings.fontSize || 32, serif: !!settings.serif,
+        return { name: exportName, url: pageData.url || "", fontSize: settings.fontSize || 32, serif: !!settings.serif,
                  width: Math.round(root.width), height: Math.round(root.height),
                  x: Math.round(readerArea.x), y: Math.round(readerArea.y),
                  lines: lines, pageStarts: pageStarts, pageHeights: pageHeights }
@@ -283,21 +315,10 @@ Rectangle {
     function pdfReady(d) {
         if (!exporting) return            // only answers to our own request
         if (d.error) { exportFail(d.error); return }
-        if (d.path !== appState.exportDir + "/Web page.pdf") { exportFail("Unexpected file."); return }
-        exportStatus = "Saving PDF \u2026\nadding it to the library"
-        let name = ""
+        if (d.name !== exportName || d.path !== appState.exportDir + "/" + exportName + ".pdf") { exportFail("Unexpected file."); return }
         try {
             const folder = libCall("ensureFolder", libraryFolder).split("\n")[0]
-            const base = docName(d.title)
-            name = base
-            for (let k = 2; k < 1000; k++) {      // a new version, never replace
-                let exists = true
-                try { libCall("lookupEntry", libraryFolder + "/" + name) } catch (e) { exists = false }
-                if (!exists) break
-                name = base + " (" + k + ")"
-            }
-            const uuid = libCall("importDocument", d.path + "," + folder).split("\n")[0]
-            libCall("renameEntry", uuid + "," + name)
+            libCall("importDocument", d.path + "," + folder)
         } catch (e) {
             exportFail(e.message)
             return
@@ -305,7 +326,7 @@ Rectangle {
         exporting = false
         exportStatus = ""
         send(reqExported)
-        showToast("Saved to " + libraryFolder + ": " + name)
+        showToast("Saved to " + libraryFolder + ": " + exportName)
     }
 
     // ------------------------------------------------------------ navigation
