@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/elastic/go-seccomp-bpf/arch"
 )
 
 // The sandbox can't be undone, so it is tested in a child process: the
@@ -78,15 +80,15 @@ func sandboxChild() {
 
 	// blocked by seccomp: EPERM at the system call itself. If exec
 	// worked, this process would be replaced and never print SANDBOX-OK.
-	if err := syscall.Exec("/bin/true", []string{"true"}, nil); err != syscall.EPERM {
-		fail("execve: want EPERM, got %v", err)
+	if err := syscall.Exec("/bin/true", []string{"true"}, nil); !blockedErr(err) {
+		fail("execve: want EPERM/ENOSYS, got %v", err)
 	}
 	for name, dom := range map[string]int{"unix": syscall.AF_UNIX, "netlink": syscall.AF_NETLINK, "packet": syscall.AF_PACKET} {
 		if _, err := syscall.Socket(dom, syscall.SOCK_DGRAM, 0); err != syscall.EPERM {
 			fail("%s socket: want EPERM, got %v", name, err)
 		}
 	}
-	if _, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0); err != syscall.EPERM {
+	if _, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0); !blockedErr(err) {
 		fail("socketpair: want EPERM, got %v", err)
 	}
 	if err := syscall.Kill(1, 0); err != syscall.EPERM {
@@ -95,17 +97,31 @@ func sandboxChild() {
 	if err := syscall.Kill(os.Getpid(), 0); err != nil {
 		fail("kill(self, 0) must work (Go runtime): %v", err)
 	}
-	if err := syscall.Chdir("/"); err != syscall.EPERM {
+	if err := syscall.Chdir("/"); !blockedErr(err) {
 		fail("chdir: want EPERM, got %v", err)
 	}
-	if err := syscall.Chroot("/"); err != syscall.EPERM {
+	if err := syscall.Chroot("/"); !blockedErr(err) {
 		fail("chroot: want EPERM, got %v", err)
 	}
-	if d, _, _ := syscall.RawSyscall(syscall.SYS_PRCTL, syscall.PR_GET_DUMPABLE, 0, 0); d != 0 {
+	// (with the allowlist, prctl itself is blocked)
+	if d, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, syscall.PR_GET_DUMPABLE, 0, 0); e == 0 && d != 0 {
 		fail("still dumpable")
 	}
-	if _, _, e := syscall.RawSyscall(425 /* io_uring_setup */, 1, 0, 0); e != syscall.EPERM {
+	if _, _, e := syscall.RawSyscall(425 /* io_uring_setup */, 1, 0, 0); !blockedErr(e) {
 		fail("io_uring_setup: want EPERM, got %v", e)
+	}
+
+	// anything not on the allowlist never reaches the kernel (arm64)
+	if strings.Contains(layers, "allowlist") {
+		if _, _, e := syscall.RawSyscall(syscall.SYS_UNAME+1000, 0, 0, 0); e != syscall.ENOSYS {
+			fail("unknown call: want ENOSYS, got %v", e)
+		}
+		if _, _, e := syscall.RawSyscall(syscall.SYS_SETXATTR, 0, 0, 0); e != syscall.ENOSYS {
+			fail("setxattr (not allowed): want ENOSYS, got %v", e)
+		}
+		if _, _, e := syscall.RawSyscall(syscall.SYS_PERSONALITY, 0xffffffff, 0, 0); e != syscall.ENOSYS {
+			fail("personality: want ENOSYS, got %v", e)
+		}
 	}
 
 	if wasRoot {
@@ -136,7 +152,20 @@ func sandboxChild() {
 	os.Exit(0)
 }
 
+func blockedErr(err error) bool { return err == syscall.EPERM || err == syscall.ENOSYS }
+
 func fail(f string, args ...any) {
 	println("FAIL: " + fmt.Sprintf(f, args...))
 	os.Exit(1)
+}
+
+func TestAllowlistNames(t *testing.T) {
+	for _, n := range allowedSyscalls {
+		if _, ok := arch.AARCH64.SyscallNames[n]; !ok {
+			t.Errorf("allowlist: %q is not an arm64 system call name", n)
+		}
+	}
+	if _, err := allowList(); err != nil {
+		t.Error(err)
+	}
 }

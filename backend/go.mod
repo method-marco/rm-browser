@@ -10,6 +10,7 @@ require (
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261105095718-a1058eb15227
 	golang.org/x/image v0.47.0
 	golang.org/x/net v0.62.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
@@ -19,7 +20,6 @@ require (
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/itlightning/dateparse v0.2.1 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )

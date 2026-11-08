@@ -57,11 +57,13 @@ itself in before loading anything. AppLoad starts it as root, then:
    The rest of the tablet's files, your notebooks and `/proc` no longer exist for it
 3. **Drops root:** user and group `nobody` (65534), no groups, no capabilities, not dumpable (no
    core dumps, other processes can't read its memory), limits on file size and open files
-4. **seccomp** (via [go-seccomp-bpf](https://github.com/elastic/go-seccomp-bpf)) with
-   `no_new_privs`: system calls a browser never needs fail: starting programs (`execve`), other
-   processes' memory, signals to other processes, mounting, kernel modules, BPF, `io_uring`,
-   namespaces, changing user ids or directories, and **every socket except IPv4/IPv6** (no Unix
-   sockets to D-Bus or systemd, no netlink, no raw sockets)
+4. **seccomp allowlist** with `no_new_privs`: on the Paper Pro / Move (arm64) only the ~70
+   system calls the backend actually uses reach the kernel; every other call fails with
+   `ENOSYS` before any kernel code behind it runs, so kernel bugs there can't be used. The list
+   comes from Go's runtime plus a trace of the backend in many situations
+   (`scripts/trace-syscalls.sh`). On top: sockets only IPv4/IPv6 (no Unix sockets to D-Bus or
+   systemd, no netlink), signals only to itself, and a wrong CPU architecture kills the process.
+   On reMarkable 1/2 (32-bit, not traced) a list of dangerous calls is blocked instead
 5. **[Landlock](https://landlock.io)** (via [go-landlock](https://github.com/landlock-lsm/go-landlock))
    on kernels that have it (the Paper Pro Move's kernel doesn't; the other layers don't rely on it):
    file and network access limited once more in the kernel

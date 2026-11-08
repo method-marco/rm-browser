@@ -39,7 +39,6 @@ import (
 	"syscall"
 
 	seccomp "github.com/elastic/go-seccomp-bpf"
-	"github.com/elastic/go-seccomp-bpf/arch"
 	"github.com/landlock-lsm/go-landlock/landlock"
 )
 
@@ -49,8 +48,10 @@ const sandboxUID = 65534 // nobody
 // kernels without Landlock (the reMarkable Paper Pro's).
 var useLandlock = true
 
-// blockedSyscalls fail with EPERM inside the sandbox. Names that don't
-// exist on the running architecture are skipped.
+// blockedSyscalls fail inside the sandbox. On arm64 (Paper Pro, Paper Pro
+// Move) the filter is an allowlist (seccomp_linux.go) and none of these
+// may ever be on it; on 32-bit ARM (reMarkable 1/2), where the allowlist
+// hasn't been traced, these are blocked one by one.
 var blockedSyscalls = []string{
 	// starting other programs
 	"execve", "execveat", "fork", "vfork", "memfd_create",
@@ -173,45 +174,11 @@ func enterSandbox(jail string, dirs ...string) (string, error) {
 	if !seccomp.Supported() {
 		return "", fmt.Errorf("the kernel has no seccomp")
 	}
-	info, err := arch.GetInfo("")
+	mode, err := loadSeccomp(uint64(os.Getpid()))
 	if err != nil {
 		return "", fmt.Errorf("seccomp: %w", err)
 	}
-	var names []string
-	for _, n := range blockedSyscalls {
-		if _, ok := info.SyscallNames[n]; ok {
-			names = append(names, n)
-		}
-	}
-	pid := uint64(os.Getpid())
-	err = seccomp.LoadFilter(seccomp.Filter{
-		NoNewPrivs: true,
-		Flag:       seccomp.FilterFlagTSync,
-		Policy: seccomp.Policy{
-			DefaultAction: seccomp.ActionAllow,
-			Syscalls: []seccomp.SyscallGroup{
-				{Action: seccomp.ActionErrno, Names: names},
-				{Action: seccomp.ActionErrno, NamesWithCondtions: []seccomp.NameWithConditions{
-					// sockets: IPv4 and IPv6 only
-					{Name: "socket", Conditions: seccomp.ArgumentConditions{
-						{Argument: 0, Operation: seccomp.NotEqual, Value: syscall.AF_INET},
-						{Argument: 0, Operation: seccomp.NotEqual, Value: syscall.AF_INET6},
-					}},
-					// signals only to itself (Go's runtime signals its own threads)
-					{Name: "kill", Conditions: seccomp.ArgumentConditions{
-						{Argument: 0, Operation: seccomp.NotEqual, Value: pid},
-					}},
-					{Name: "tgkill", Conditions: seccomp.ArgumentConditions{
-						{Argument: 0, Operation: seccomp.NotEqual, Value: pid},
-					}},
-				}},
-			},
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("seccomp: %w", err)
-	}
-	layers = append(layers, "seccomp")
+	layers = append(layers, mode)
 	return strings.Join(layers, ", "), nil
 }
 
