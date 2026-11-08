@@ -201,6 +201,7 @@ Rectangle {
     }
     function openLink(href) {
         if (!href) return
+        if (href.charAt(0) !== "#" && !/^https?:\/\//i.test(href)) return   // web links only
         if (href.charAt(0) === "#") {
             const id = decodeURIComponent(href.substring(1))
             const hs = pageData ? pageData.headings : []
@@ -233,6 +234,20 @@ Rectangle {
     }
 
     // ------------------------------------------------------------ reader
+    // Defence in depth: the backend already writes only safe rich text, but
+    // xochitl (which shows it) runs as root, so check again here: images
+    // only from the backend's image folder, nothing else Qt could load.
+    function safeHtml(h) {
+        const dir = appState.imageDir ? "file://" + appState.imageDir + "/" : ""
+        return String(h || "")
+            .replace(/<img\b[^>]*>/gi, function (tag) {
+                const m = tag.match(/\bsrc="([^"]*)"/i)
+                return dir !== "" && m && m[1].indexOf(dir) === 0 && m[1].indexOf("..") < 0 ? tag : ""
+            })
+            .replace(/\bbackground\s*=\s*"[^"]*"/gi, "")
+            .replace(/url\s*\(/gi, "")
+            .replace(/<(link|style|script|iframe|object|embed)\b[^>]*>/gi, "")
+    }
     function showPage(p, position) {
         pageData = p
         let meta = []
@@ -251,7 +266,7 @@ Rectangle {
         // linger). Clearing it first and setting the new text a moment
         // later is reliable.
         pageHtml = ""
-        nextHtml = "<h1>" + esc(p.title) + "</h1><p><small>" + meta.join(" · ") + "</small></p>" + p.html
+        nextHtml = "<h1>" + esc(p.title) + "</h1><p><small>" + meta.join(" · ") + "</small></p>" + safeHtml(p.html)
         setTextTimer.restart()
         view = "page"
         menuOpen = false
@@ -1009,7 +1024,7 @@ Rectangle {
                 font.pixelSize: 22; color: "#444"
                 text: "Cookies are kept in memory only, never on the tablet. No JavaScript is ever run. "
                       + "Pages are loaded by a sandboxed helper ("
-                      + (appState.sandbox || "starting") + ") that cannot start programs or touch your notebooks."
+                      + (appState.sandbox || "starting") + ") that cannot start programs, see your notebooks or reach your local network."
             }
             Text { text: "rm-browser " + (appState.version || ""); font.pixelSize: 22; color: "#444" }
         }

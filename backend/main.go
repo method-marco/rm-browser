@@ -84,6 +84,9 @@ const (
 	maxHistory = 300
 	maxStack   = 50
 	pageCache  = 12
+
+	maxImageCache  = 150 << 20 // converted images on disk: prune above this ...
+	keepImageCache = 100 << 20 // ... down to this, oldest first
 )
 
 type App struct {
@@ -130,7 +133,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	sandbox, err := enterSandbox(cfgDir, cacheDir)
+	sandbox, err := enterSandbox(jailDir(cacheDir), cfgDir, cacheDir)
 	if err != nil {
 		// Never browse unsandboxed.
 		log.Printf("sandbox: %v", err)
@@ -186,6 +189,14 @@ func cacheDirPath() string {
 		return p
 	}
 	return filepath.Join(homeDir(), ".cache", "rm-browser")
+}
+
+// jailDir is the empty folder the backend chroots into (next to the cache).
+func jailDir(cacheDir string) string {
+	if p := os.Getenv("RM_BROWSER_JAIL"); p != "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(cacheDir), "rm-browser-jail")
 }
 
 func mustJSON(v any) string {
@@ -259,6 +270,7 @@ func (a *App) stateLocked() map[string]any {
 		"canForward": a.cfg.Pos >= 0 && a.cfg.Pos < len(a.cfg.Stack)-1,
 		"version":    version,
 		"sandbox":    a.sandbox,
+		"imageDir":   a.store.cachePath("img"),
 	}
 }
 
@@ -601,6 +613,9 @@ func (a *App) loadPage(ctx context.Context, gen int, e Entry, reload bool) {
 			return
 		}
 		cp = &cachedPage{page: pg}
+		if err := a.store.pruneImages(maxImageCache, keepImageCache); err != nil {
+			log.Printf("prune images: %v", err)
+		}
 		a.mu.Lock()
 		if _, ok := a.cache[key]; !ok {
 			a.cacheKeys = append(a.cacheKeys, key)

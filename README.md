@@ -48,21 +48,32 @@ website sends:
 Everything that touches the network or website data runs in the backend process, which locks
 itself in before loading anything. AppLoad starts it as root, then:
 
-1. **Drops root:** it switches to the unprivileged user `nobody` (uid 65534) without groups. It
-   keeps only handles to its own two folders (`os.Root`: no escaping them via `..` or symlinks).
-   Your notebooks, xochitl and the system are out of reach
-2. **no_new_privs:** it can never gain privileges again
-3. **[Landlock](https://landlock.io)** (via [go-landlock](https://github.com/landlock-lsm/go-landlock),
-   if the tablet's kernel has it): files only in `/etc` (read-only: DNS, certificates) and its two
-   folders; network only outgoing to web ports (80, 443, 8080, 8443) and DNS, no listening; no
-   signals to processes outside the sandbox
-4. **seccomp** (via [go-seccomp-bpf](https://github.com/elastic/go-seccomp-bpf)): system calls a
-   browser never needs fail: starting programs (`execve`), debugging other processes, mounting,
-   kernel modules, BPF, namespaces, changing user ids, setting the clock, …
+1. **Its own folders only:** it hands its two data folders to the user `nobody` and keeps handles
+   to them (`os.Root`: nothing escapes them via `..`, absolute paths or symlinks)
+2. **chroot jail:** it locks itself into an empty, root-owned folder
+   (`/home/root/.cache/rm-browser-jail`) holding only copies of `resolv.conf` and `hosts` for DNS.
+   The rest of the tablet's files, your notebooks and `/proc` no longer exist for it
+3. **Drops root:** user and group `nobody` (65534), no groups, no capabilities, not dumpable (no
+   core dumps, other processes can't read its memory), limits on file size and open files
+4. **seccomp** (via [go-seccomp-bpf](https://github.com/elastic/go-seccomp-bpf)) with
+   `no_new_privs`: system calls a browser never needs fail: starting programs (`execve`), other
+   processes' memory, signals to other processes, mounting, kernel modules, BPF, `io_uring`,
+   namespaces, changing user ids or directories, and **every socket except IPv4/IPv6** (no Unix
+   sockets to D-Bus or systemd, no netlink, no raw sockets)
+5. **[Landlock](https://landlock.io)** (via [go-landlock](https://github.com/landlock-lsm/go-landlock))
+   on kernels that have it (the Paper Pro Move's kernel doesn't; the other layers don't rely on it):
+   file and network access limited once more in the kernel
+
+The HTTP client adds network rules, checked for every connection after DNS (so DNS rebinding
+can't get around them): **no addresses in your local network or on the tablet** (loopback,
+private, link-local, CGNAT, multicast), so a page can't make the browser reach your router or
+other devices; and **only web ports** 80, 443, 8080, 8443.
 
 Images are decoded inside the sandbox by Go's memory-safe decoders and re-encoded as new JPEG
-files, so the frontend (in xochitl, which runs as root) never opens anything a website sent.
-If the sandbox can't be set up, the browser refuses to run. *Settings* shows the active layers.
+files, so the frontend (in xochitl, which runs as root) never opens anything a website sent. The
+frontend checks again that images come only from the backend's image folder and links are only
+`http(s)`. The image cache is capped at 150 MB. If the sandbox can't be set up, the browser refuses
+to run. *Settings* shows the active layers.
 
 ## Limits
 
@@ -70,7 +81,8 @@ If the sandbox can't be set up, the browser refuses to run. *Settings* shows the
   and there are no logins, comments or forms
 - DuckDuckGo sometimes asks to prove you're not a bot (more likely after many quick searches).
   The app then asks you to try again in a few minutes
-- Sites on unusual ports (other than 80, 443, 8080, 8443) can't be opened
+- Sites on unusual ports (other than 80, 443, 8080, 8443) and addresses in your local network
+  (router, NAS, `localhost`) can't be opened
 
 ## Requirements
 
@@ -98,7 +110,8 @@ Then reload AppLoad. The app shows up as **Browser**.
 | Path | Contents |
 |---|---|
 | `/home/root/.config/rm-browser/config.json` | settings, history, back/forward list |
-| `/home/root/.cache/rm-browser/` | converted images |
+| `/home/root/.cache/rm-browser/` | converted images (at most 150 MB) |
+| `/home/root/.cache/rm-browser-jail/` | the sandbox's empty root folder (DNS settings only) |
 
 Both folders belong to user `nobody` (the sandbox). Cookies are never written to disk.
 

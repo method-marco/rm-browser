@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClassifyInput(t *testing.T) {
@@ -276,6 +279,8 @@ func TestStore(t *testing.T) {
 // End to end through the App with a local web server: page load, history,
 // back/forward and clearing data.
 func TestAppFlow(t *testing.T) {
+	allowLocalForTests = true
+	defer func() { allowLocalForTests = false }()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: "track", Value: "1"})
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -402,5 +407,52 @@ func TestCardListsAndBlockLinks(t *testing.T) {
 	// no block element may sit inside a link
 	if regexp.MustCompile(`<a [^>]*>[^<]*<(p|h\d|div)`).MatchString(h) {
 		t.Errorf("block inside a link: %s", h)
+	}
+}
+
+func TestNoLocalNetwork(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("secret")) }))
+	defer srv.Close()
+	c := newHTTPClient()
+	ctx := context.Background()
+	for _, u := range []string{srv.URL, "http://localhost:80/", "http://[::1]:443/", "http://192.168.1.1/", "http://10.11.99.1/",
+		"http://169.254.169.254/latest/meta-data/", "http://[::ffff:127.0.0.1]:80/", "http://0.0.0.0/"} {
+		req, _ := newRequest(ctx, http.MethodGet, u, nil)
+		if _, err := fetch(ctx, c, req, 1<<20); err == nil {
+			t.Errorf("%s: local address was fetched", u)
+		} else if !strings.Contains(err.Error(), "local network") && !strings.Contains(err.Error(), "web ports") {
+			t.Errorf("%s: unexpected error %v", u, err)
+		}
+	}
+	for ip, local := range map[string]bool{"8.8.8.8": false, "172.15.0.1": false, "172.16.0.1": true, "100.64.1.1": true,
+		"2001:4860::8888": false, "fd00::1": true, "fe80::1": true} {
+		if isLocalIP(net.ParseIP(ip)) != local {
+			t.Errorf("isLocalIP(%s) != %v", ip, local)
+		}
+	}
+}
+
+func TestPruneImages(t *testing.T) {
+	dir := t.TempDir()
+	s, err := openStore(filepath.Join(dir, "cfg"), filepath.Join(dir, "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pruneImages(10, 5); err != nil { // no img folder yet
+		t.Fatal(err)
+	}
+	_ = s.cache.MkdirAll("img", 0o700)
+	base := time.Now().Add(-time.Hour)
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("img/%d.jpg", i)
+		_ = s.cache.WriteFile(name, make([]byte, 100), 0o644)
+		_ = s.cache.Chtimes(name, base.Add(time.Duration(i)*time.Minute), base.Add(time.Duration(i)*time.Minute))
+	}
+	if err := s.pruneImages(900, 500); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := os.ReadDir(filepath.Join(dir, "cache", "img"))
+	if len(left) != 5 || left[0].Name() != "5.jpg" {
+		t.Errorf("left: %v", left)
 	}
 }

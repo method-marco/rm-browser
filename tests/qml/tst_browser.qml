@@ -37,7 +37,7 @@ Item {
         function state(extra) {
             return Object.assign({ settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false },
                                    history: [{ url: "https://example.com/old", title: "An old page", time: 1 }, { query: "e-ink tablets", time: 2 }],
-                                   canBack: true, canForward: false, sandbox: "unprivileged user, Landlock v3, seccomp", version: "test" }, extra || {})
+                                   canBack: true, canForward: false, imageDir: "/repo/app", sandbox: "unprivileged user, Landlock v3, seccomp", version: "test" }, extra || {})
         }
         function shot(name) {
             let done = false
@@ -217,6 +217,19 @@ Item {
                 if (app.panel !== "confirm") break
             }
             verify(sent, "clear data sent")
+        }
+
+        function test_11_unsafe_html_dropped() {
+            const h = app.safeHtml('<p>a<img src="file:///home/root/.local/share/remarkable/xochitl/x.png" width="10" height="10"/>'
+                + '<img src="file:///repo/app/../../etc/x.jpg"/><img src="file:///repo/app/icon.png" width="5" height="5"/>'
+                + '<table background="file:///etc/x.png"><tr><td style="background-image: url(file:///x)">c</td></tr></table>'
+                + '<link rel="stylesheet" href="x.css"><script>x</script></p>')
+            verify(h.indexOf("xochitl") < 0 && h.indexOf("etc/x") < 0 && h.indexOf("url(") < 0 && h.indexOf("<link") < 0 && h.indexOf("<script") < 0, h)
+            verify(h.indexOf('src="file:///repo/app/icon.png"') > 0, h)
+            Bus.clear()
+            app.openLink("file:///etc/passwd")
+            app.openLink("javascript:alert(1)")
+            compare(Bus.lastOf(2), null)
         }
 
         function test_10_error_view() {

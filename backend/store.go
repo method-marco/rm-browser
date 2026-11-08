@@ -7,8 +7,10 @@ package main
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 type Store struct {
@@ -68,4 +70,49 @@ func (s *Store) clearCache() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// pruneImages deletes the oldest converted images once they take more
+// than max bytes, until they take at most keep.
+func (s *Store) pruneImages(max, keep int64) error {
+	d, err := s.cache.Open("img")
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	entries, err := d.ReadDir(-1)
+	d.Close()
+	if err != nil {
+		return err
+	}
+	type file struct {
+		name string
+		size int64
+		mod  int64
+	}
+	var files []file
+	var total int64
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		files = append(files, file{e.Name(), info.Size(), info.ModTime().UnixNano()})
+		total += info.Size()
+	}
+	if total <= max {
+		return nil
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod < files[j].mod })
+	for _, f := range files {
+		if total <= keep {
+			break
+		}
+		if err := s.cache.Remove("img/" + f.name); err == nil {
+			total -= f.size
+		}
+	}
+	return nil
 }

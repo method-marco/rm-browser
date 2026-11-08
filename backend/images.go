@@ -38,6 +38,8 @@ func (a *App) prepareImage(ctx context.Context, src string, maxW, maxH int) (str
 	name := "img/" + hex.EncodeToString(sum[:12]) + ".jpg"
 	if b, err := a.store.cache.ReadFile(name); err == nil {
 		if cfg, err := jpeg.DecodeConfig(bytes.NewReader(b)); err == nil {
+			now := time.Now()
+			_ = a.store.cache.Chtimes(name, now, now) // recently used: pruned last
 			return a.store.cachePath(name), cfg.Width, cfg.Height, true
 		}
 	}

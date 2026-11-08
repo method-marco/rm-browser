@@ -33,7 +33,7 @@ Item {
         function test_pages() {
             const list = read(dir + "index.txt").split("\n").filter(function (l) { return l.trim() !== "" })
             if (list.length === 0) skip("no fixtures")
-            Bus.deliver(101, { settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false }, history: [] })
+            Bus.deliver(101, { settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
             const te = findChild(app, "te")
             for (let n = 0; n < list.length; n++) {
                 const page = JSON.parse(read(dir + list[n]))

@@ -61,6 +61,7 @@ postdeinstall() {
 		rm -rf /home/root/.config/rm-browser
 		# cached images
 		rm -rf /home/root/.cache/rm-browser
+		rm -rf /home/root/.cache/rm-browser-jail
 	fi
 }
 

@@ -18,6 +18,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "golang.org/x/crypto/x509roots/fallback"
@@ -37,8 +38,8 @@ const (
 func newHTTPClient() *http.Client {
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	tr := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext: (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second,
+			ControlContext: checkDestination}).DialContext,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
@@ -60,6 +61,64 @@ func newHTTPClient() *http.Client {
 			return nil
 		},
 	}
+}
+
+// allowLocalForTests lets tests talk to their local web server.
+var allowLocalForTests = false
+
+// webPorts are the only ports the browser connects to.
+var webPorts = map[string]bool{"80": true, "443": true, "8080": true, "8443": true}
+
+var errLocalNetwork = errors.New("this browser doesn't open addresses in your local network or on the tablet itself")
+
+// checkDestination runs for every connection, after DNS, so a public
+// name that resolves to a local address (DNS rebinding) is caught too.
+// Pages must not be able to reach the router, other devices or services
+// on the tablet (e.g. through an image address).
+func checkDestination(ctx context.Context, network, address string, _ syscall.RawConn) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("unexpected address %q", address)
+	}
+	if allowLocalForTests {
+		return nil
+	}
+	if !webPorts[port] {
+		return fmt.Errorf("this browser only connects to web ports (80, 443, 8080, 8443), not %s", port)
+	}
+	if isLocalIP(ip) {
+		return errLocalNetwork
+	}
+	return nil
+}
+
+var localNets = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, c := range []string{
+		"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+		"192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/4", "240.0.0.0/4",
+		"::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8", "64:ff9b:1::/48",
+	} {
+		_, n, _ := net.ParseCIDR(c)
+		out = append(out, n)
+	}
+	return out
+}()
+
+func isLocalIP(ip net.IP) bool {
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4 // also catches IPv4-mapped IPv6 addresses
+	}
+	for _, n := range localNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // Fetched is a downloaded response body, decoded to UTF-8 for text types.
@@ -126,6 +185,8 @@ func friendlyError(err error) error {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return err
+	case errors.Is(err, errLocalNetwork):
+		return errLocalNetwork
 	case errors.As(err, &cert):
 		return errors.New("the site's security certificate is not valid, so the page was not loaded")
 	case errors.As(err, &dns):
