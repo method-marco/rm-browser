@@ -24,6 +24,11 @@ Item {
             x.send()
             return x.responseText
         }
+        function write(url, text) {
+            const x = new XMLHttpRequest()
+            x.open("PUT", url, false)
+            x.send(text)
+        }
         function shot(name) {
             let done = false
             app.grabToImage(function (r) { r.saveToFile(outDir + name + ".png"); done = true })
@@ -55,6 +60,21 @@ Item {
                 app.goToPage(1)
                 wait(200)
                 shot(base + "-p2")
+                // the layout Save as PDF sends, for the backend's test
+                // (TestFixtureLayouts), in two fonts and sizes
+                const lay = app.exportLayout()
+                let sum = 0
+                for (let i = 0; i < lay.lines.length; i += 4) sum += lay.lines[i]
+                compare(sum, Array.from(te.getText(0, te.length).replace(/\s/g, "")).length, list[n] + ": every character on a line")
+                write(dir + list[n] + ".sans32.layout", JSON.stringify(lay))
+                write(dir + list[n] + ".qttext", te.getText(0, te.length))
+                Bus.deliver(101, { settings: { fontSize: 44, serif: true, safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
+                tryVerify(function () { return te.font.family === "EB Garamond" && te.font.pixelSize === 44 }, 3000)
+                wait(600)   // reflow and paginate
+                tryVerify(function () { return app.pageCount > 1 }, 5000)
+                write(dir + list[n] + ".serif44.layout", JSON.stringify(app.exportLayout()))
+                Bus.deliver(101, { settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
+                wait(400)
             }
         }
     }

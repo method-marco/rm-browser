@@ -85,10 +85,9 @@ var jailFiles = []string{"/etc/resolv.conf", "/etc/hosts"}
 
 // enterSandbox applies all layers. jail is an empty folder to chroot into
 // (created, owned by root); dirs are the data folders, already opened as
-// os.Root and handed to the sandbox user; readOnly are further folders
-// opened before, which keep their owner and are only read (Landlock).
-// It returns a short description of the active layers.
-func enterSandbox(jail string, readOnly []string, dirs ...string) (string, error) {
+// os.Root and handed to the sandbox user. It returns a short description
+// of the active layers.
+func enterSandbox(jail string, dirs ...string) (string, error) {
 	var layers []string
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -113,7 +112,7 @@ func enterSandbox(jail string, readOnly []string, dirs ...string) (string, error
 	}
 
 	// Landlock rules are set by path, so before the chroot.
-	ro := append([]string{jail, "/etc", "/usr/share/ca-certificates", "/usr/lib/ssl"}, readOnly...)
+	ro := []string{jail, "/etc", "/usr/share/ca-certificates", "/usr/lib/ssl"}
 	if t, err := filepath.EvalSymlinks("/etc/resolv.conf"); err == nil && !strings.HasPrefix(t, "/etc/") {
 		ro = append(ro, filepath.Dir(t))
 	}

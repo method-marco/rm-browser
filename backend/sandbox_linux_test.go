@@ -55,8 +55,7 @@ func sandboxChild() {
 	if err != nil {
 		fail("openExport: %v", err)
 	}
-	_ = os.WriteFile(filepath.Join(dir, "export", "p0.png"), []byte("page"), 0o644)
-	layers, err := enterSandbox(jail, []string{export.dir}, cfg, cache)
+	layers, err := enterSandbox(jail, cfg, cache)
 	if err != nil {
 		fail("enterSandbox: %v", err)
 	}
@@ -69,28 +68,19 @@ func sandboxChild() {
 	if err := store.cache.WriteFile("x", []byte("x"), 0o644); err != nil {
 		fail("cache write: %v", err)
 	}
-	// export folder: page images readable, the PDF writable through its
-	// descriptor, but nothing can be created or replaced there
-	if b, err := export.readPage("p0.png"); err != nil || string(b) != "page" {
-		fail("reading a captured page: %q %v", b, err)
-	}
-	if _, err := export.pdf.Seek(0, 0); err != nil {
-		fail("pdf seek: %v", err)
-	}
-	if _, err := export.pdf.Write([]byte("%PDF-1.3 test")); err != nil {
+	// export: the PDF is written through its descriptor; the folder
+	// itself is out of reach
+	if err := export.write([]byte("%PDF-1.3 test")); err != nil {
 		fail("pdf write: %v", err)
 	}
-	if err := export.pdf.Truncate(8); err != nil {
+	if err := export.clear(); err != nil {
 		fail("pdf truncate: %v", err)
 	}
 	if wasRoot {
-		if err := export.root.WriteFile("evil.pdf", []byte("x"), 0o644); err == nil {
+		if err := os.WriteFile(filepath.Join(export.dir, "evil.pdf"), []byte("x"), 0o644); err == nil {
 			fail("could create a file in the export folder")
 		}
-		if err := export.root.Remove(exportPDFName); err == nil {
-			fail("could delete the export PDF")
-		}
-		if err := export.root.Symlink("/etc/shadow", "p1.png"); err == nil {
+		if err := os.Symlink("/etc/shadow", filepath.Join(export.dir, "x.pdf")); err == nil {
 			fail("could plant a link in the export folder")
 		}
 	}

@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -116,6 +117,7 @@ type App struct {
 	suggestStop context.CancelFunc
 
 	export *Export // nil: Save as PDF unavailable
+	shown  *Page   // the page the reader shows now (for Save as PDF)
 
 	sendHook func(typ int, v any) // tests: receives messages instead of AppLoad
 }
@@ -141,18 +143,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// The export folder (Save as PDF) stays root's: opened now, then only
-	// read through its handle and written through the PDF's descriptor.
+	// The export folder (Save as PDF) stays root's: the PDF is opened now
+	// and only written through its descriptor.
 	export, err := openExport(exportDirPath())
 	if err != nil {
 		log.Printf("export folder: %v (Save as PDF is off)", err)
 		export = nil
 	}
-	var readOnly []string
-	if export != nil {
-		readOnly = append(readOnly, export.dir)
-	}
-	sandbox, err := enterSandbox(jailDir(cacheDir), readOnly, cfgDir, cacheDir)
+	sandbox, err := enterSandbox(jailDir(cacheDir), cfgDir, cacheDir)
 	if err != nil {
 		// Never browse unsandboxed.
 		log.Printf("sandbox: %v", err)
@@ -436,6 +434,7 @@ func (a *App) handle(typ int, contents string) {
 	case reqSavePDF:
 		var er ExportRequest
 		if err := json.Unmarshal([]byte(contents), &er); err != nil {
+			a.send(resPDF, map[string]any{"error": "Could not make the PDF."})
 			return
 		}
 		a.savePDF(er)
@@ -707,6 +706,9 @@ func (a *App) loadPage(ctx context.Context, gen int, e Entry, reload bool) {
 	if !a.isCurrentLoad(gen) {
 		return
 	}
+	a.mu.Lock()
+	a.shown = cp.page
+	a.mu.Unlock()
 	a.send(resPage, map[string]any{"page": cp.page, "position": e.Page})
 }
 
@@ -740,23 +742,43 @@ func (a *App) exportDir() string {
 	return a.export.dir
 }
 
-// savePDF builds the PDF from the pages the frontend captured.
+// savePDF draws the shown page as the reader laid it out (see export.go).
 func (a *App) savePDF(er ExportRequest) {
-	if a.export == nil {
-		a.sendError(errors.New("saving PDFs is not available"), false)
+	a.mu.Lock()
+	p := a.shown
+	a.mu.Unlock()
+	fail := func(msg string) { a.send(resPDF, map[string]any{"error": msg}) }
+	switch {
+	case a.export == nil:
+		fail("Saving PDFs is not available.")
+		return
+	case p == nil || p.URL != er.URL:
+		fail("The page changed while saving. Please try again.")
 		return
 	}
 	go func() {
-		a.busy(true, "Making the PDF …")
-		err := a.export.writePDF(er)
-		a.busy(false, "")
+		var buf bytes.Buffer
+		err := buildPDF(&buf, p, er, a.readImage)
+		if err == nil {
+			err = a.export.write(buf.Bytes())
+		}
 		if err != nil {
 			log.Printf("pdf: %v", err)
-			a.send(resPDF, map[string]any{"error": "Could not make the PDF: " + err.Error()})
+			fail("Could not make the PDF: " + err.Error())
 			return
 		}
-		a.send(resPDF, map[string]any{"path": a.export.pdfPath(), "title": cleanTitle(er.Title)})
+		a.send(resPDF, map[string]any{"path": a.export.pdfPath(), "title": cleanTitle(p.Title)})
 	}()
+}
+
+// readImage reads one of the reader's pictures for the PDF: only from the
+// image cache.
+func (a *App) readImage(path string) ([]byte, error) {
+	prefix := a.store.cachePath("img") + "/"
+	if !strings.HasPrefix(path, prefix) {
+		return nil, errors.New("not a cached picture")
+	}
+	return a.store.cache.ReadFile("img/" + strings.TrimPrefix(path, prefix))
 }
 
 // newSession forgets cookies and open connections; it runs when the app

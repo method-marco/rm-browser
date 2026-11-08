@@ -254,38 +254,38 @@ Item {
             const p = b.mapToItem(app, b.width / 2, b.height / 2)
             mouseClick(app, p.x, p.y)
         }
-        function imageSize(file) {
-            const img = Qt.createQmlObject("import QtQuick 2.15; Image { cache: false; asynchronous: false }", tc)
-            img.source = "file://" + file
-            const r = img.status === Image.Ready ? [img.sourceSize.width, img.sourceSize.height] : null
-            img.destroy()
-            return r
-        }
         function exportOnce(expectName) {
             app.menuOpen = true
             wait(50)
             Bus.clear()
             tapButton("Save as PDF")
-            tryVerify(function () { return Bus.lastOf(15) !== null }, 20000, "pages captured")
+            verify(app.exportStatus.indexOf("Saving PDF") === 0, app.exportStatus)
+            tryVerify(function () { return Bus.lastOf(15) !== null }, 5000, "layout sent")
             const req = Bus.lastOf(15)
-            compare(req.pages, app.pageCount)
+            compare(req.url, "https://example.com/story")
             compare(req.width, win.width); compare(req.height, win.height)
             compare(req.x, 56); compare(req.y, 48)
-            verify(req.headings.length > 0 && req.headings[1].page > 0, JSON.stringify(req.headings))
-            compare(app.pageIndex, 2, "back on the page the reader was on")
-            compare(Bus.lastOf(7), null, "capturing doesn't move the reading position")
-            const dir = outDir + "export"
-            const first = imageSize(dir + "/p0.png"), last = imageSize(dir + "/p" + (req.pages - 1) + ".png")
-            verify(first && last, "page images written")
-            compare(first[0], Math.round(findChild(app, "readerArea").width))
+            compare(req.fontSize, 32)
+            compare(req.pageStarts.length, app.pageCount)
+            compare(req.lines.length % 4, 0)
+            // every visible character of the page is on exactly one line
+            let sum = 0, prevY = -1, ordered = true
+            for (let i = 0; i < req.lines.length; i += 4) {
+                sum += req.lines[i]
+                if (req.lines[i + 1] < prevY && req.lines[i + 3] === 0) ordered = false
+                prevY = req.lines[i + 1]
+            }
+            const te = findChild(app, "te")
+            compare(sum, Array.from(te.getText(0, te.length).replace(/\s/g, "")).length)
+            verify(ordered, "lines in reading order")
+            compare(app.pageIndex, 2, "still on the same page")
             shot("pdf-saving")
-            Bus.deliver(109, { path: dir + "/Web page.pdf", title: "A Long Test Story" })
+            Bus.deliver(109, { path: outDir + "export/Web page.pdf", title: "A Long Test Story" })
             verify(!app.exporting && app.exportStatus === "", app.exportStatus)
             compare(Library.docs[Library.docs.length - 1], expectName)
-            compare(Library.imported[Library.imported.length - 1], dir + "/Web page.pdf")
+            compare(Library.imported[Library.imported.length - 1], outDir + "export/Web page.pdf")
             verify(app.toast.indexOf("Saved to Web: " + expectName) === 0, app.toast)
             verify(Bus.lastOf(16) !== null, "export file emptied")
-            tryVerify(function () { const s = imageSize(dir + "/p0.png"); return s && s[0] === 1 }, 3000, "page images wiped")
         }
 
         function test_12_save_pdf() {

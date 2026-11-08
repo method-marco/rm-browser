@@ -1,50 +1,55 @@
 package main
 
-// "Save as PDF" works like printing: the frontend captures every reader
-// page exactly as it is shown (same fonts, size and page breaks) into
-// /run/rm-browser-export/pN.png, the backend puts them together into one
-// PDF, and the frontend hands that to rm-librarian, which files it in the
-// library folder "Web".
+// "Save as PDF" works like printing: the PDF has the same pages as the
+// reader, with the same lines on them, in real (selectable) text.
 //
-// The export folder lives in RAM (/run), belongs to root and the sandbox
-// can't write it: it reads the page images through a handle opened
-// before it dropped root, and writes the PDF through a file descriptor
-// opened at the same time. So even a hijacked backend can't put a link
-// to another file there for root to import into the library.
+// The frontend doesn't send the text, only how Qt laid it out: for every
+// line on screen, how many visible characters it holds, where it starts
+// (x, y) and how tall it is, plus where each screen page begins. The
+// backend walks the same page HTML it gave the frontend, hands out the
+// characters line by line, and draws each line at Qt's position with the
+// same fonts (Noto Sans or EB Garamond, embedded) and size. Pictures are
+// the JPEGs the reader shows. Headings become the PDF's outline.
+//
+// The PDF is written through a file descriptor opened as root before the
+// sandbox starts, in a root-owned folder in RAM (/run/rm-browser-export):
+// the frontend hands exactly that file to rm-librarian, which copies it
+// into the library folder "Web". The sandbox can't create, replace or
+// link files there, so it can't make root import anything else.
 
 import (
 	"bytes"
 	"embed"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/draw"
-	"image/png"
 	"io"
+	"math"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 	"unicode"
 
 	"codeberg.org/go-pdf/fpdf"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 const (
 	exportPDFName  = "Web page.pdf" // librarian names the document after it; renamed afterwards
-	maxExportPages = 400
-	maxPageImage   = 20 << 20 // bytes of one captured page
-	maxPageSide    = 6000     // pixels
+	maxExportPages = 1000
+	maxExportLines = 50000
+	maxPageSide    = 6000     // PDF page size limit (pixels = points)
 	maxExportPDF   = 60 << 20 // RLIMIT_FSIZE is 64 MB
 )
 
 // Export is the backend's side of the export folder.
 type Export struct {
-	dir  string   // absolute path, for the frontend
-	root *os.Root // page images (read only for the sandbox)
-	pdf  *os.File // the PDF, root-owned, opened before the sandbox
+	dir string   // absolute path, for the frontend
+	pdf *os.File // the PDF, root-owned, opened before the sandbox
 }
 
 func exportDirPath() string {
@@ -54,9 +59,9 @@ func exportDirPath() string {
 	return "/run/rm-browser-export"
 }
 
-// openExport prepares the folder and the PDF file. As root, both are
-// root's: the folder 0755 (the sandbox may read the page images), the
-// PDF 0600 (written through the descriptor only).
+// openExport prepares the folder and the PDF file; as root both stay
+// root's (folder 0755, file 0600) and are only used through the
+// descriptor.
 func openExport(dir string) (*Export, error) {
 	if fi, err := os.Lstat(dir); err == nil && !fi.IsDir() {
 		return nil, fmt.Errorf("%s is not a folder", dir)
@@ -72,21 +77,18 @@ func openExport(dir string) (*Export, error) {
 	if err := os.Chmod(dir, 0o755); err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, err
-	}
 	f, err := os.OpenFile(filepath.Join(dir, exportPDFName), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		root.Close()
 		return nil, err
 	}
 	if os.Geteuid() == 0 {
 		if err := f.Chown(0, 0); err != nil {
+			f.Close()
 			return nil, err
 		}
 	}
 	if err := f.Chmod(0o600); err != nil {
+		f.Close()
 		return nil, err
 	}
 	_ = f.Truncate(0)
@@ -94,181 +96,524 @@ func openExport(dir string) (*Export, error) {
 	if err != nil {
 		abs = dir
 	}
-	return &Export{dir: abs, root: root, pdf: f}, nil
+	return &Export{dir: abs, pdf: f}, nil
 }
 
 func (e *Export) pdfPath() string { return filepath.Join(e.dir, exportPDFName) }
 
-// clear empties the PDF (the page images are blanked by the frontend).
+// clear empties the PDF once it is in the library (or saving failed).
 func (e *Export) clear() error { return e.pdf.Truncate(0) }
 
-// ExportRequest describes the captured pages.
-type ExportRequest struct {
-	Pages    int             `json:"pages"`
-	Title    string          `json:"title"`
-	URL      string          `json:"url"`
-	Width    float64         `json:"width"` // screen size: the PDF page
-	Height   float64         `json:"height"`
-	X        float64         `json:"x"` // where the captured reader area sits on the screen
-	Y        float64         `json:"y"`
-	Headings []ExportHeading `json:"headings"`
-}
-
-type ExportHeading struct {
-	Text  string `json:"text"`
-	Level int    `json:"level"`
-	Page  int    `json:"page"`
-}
-
-//go:embed fonts/NotoSans-Regular.ttf
-var fontFS embed.FS
-
-// writePDF builds the PDF from the captured pages and writes it to the
-// export file.
-func (e *Export) writePDF(req ExportRequest) error {
-	if req.Pages < 1 || req.Pages > maxExportPages {
-		return fmt.Errorf("%d pages", req.Pages)
-	}
-	if req.Width < 100 || req.Height < 100 || req.Width > maxPageSide || req.Height > maxPageSide {
-		return errors.New("bad page size")
-	}
-	pages := make([][]byte, req.Pages)
-	for i := range pages {
-		b, err := e.readPage(fmt.Sprintf("p%d.png", i))
-		if err != nil {
-			return fmt.Errorf("page %d: %w", i+1, err)
-		}
-		pages[i] = b
-	}
-	var buf bytes.Buffer
-	if err := buildPDF(&buf, req, pages); err != nil {
-		return err
-	}
-	if buf.Len() > maxExportPDF {
+// write replaces the PDF's contents.
+func (e *Export) write(b []byte) error {
+	if len(b) > maxExportPDF {
 		return errors.New("the PDF would be too large")
 	}
 	if _, err := e.pdf.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	if _, err := e.pdf.Write(buf.Bytes()); err != nil {
+	if _, err := e.pdf.Write(b); err != nil {
 		return err
 	}
-	return e.pdf.Truncate(int64(buf.Len()))
+	return e.pdf.Truncate(int64(len(b)))
 }
 
-func (e *Export) readPage(name string) ([]byte, error) {
-	f, err := e.root.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !fi.Mode().IsRegular() || fi.Size() > maxPageImage {
-		return nil, errors.New("not a page image")
-	}
-	return io.ReadAll(io.LimitReader(f, maxPageImage))
+// ExportRequest is the reader's layout of the current page.
+type ExportRequest struct {
+	URL         string    `json:"url"`
+	FontSize    float64   `json:"fontSize"`
+	Serif       bool      `json:"serif"`
+	Width       float64   `json:"width"`  // screen size: the PDF page
+	Height      float64   `json:"height"` //
+	X           float64   `json:"x"`      // where the reader area sits on the screen
+	Y           float64   `json:"y"`
+	Lines       []float64 `json:"lines"` // per line: visible characters, y, height, x (in the text)
+	PageStarts  []float64 `json:"pageStarts"`
+	PageHeights []float64 `json:"pageHeights"`
 }
 
-// buildPDF puts one captured page on each PDF page, at the screen's size
-// and position, so it looks and pages exactly like the reader.
-func buildPDF(w io.Writer, req ExportRequest, pages [][]byte) error {
+func (r *ExportRequest) check() error {
+	switch {
+	case r.Width < 100 || r.Height < 100 || r.Width > maxPageSide || r.Height > maxPageSide:
+		return errors.New("bad page size")
+	case r.FontSize < 10 || r.FontSize > 100:
+		return errors.New("bad font size")
+	case len(r.Lines)%4 != 0 || len(r.Lines)/4 > maxExportLines:
+		return errors.New("bad layout")
+	case len(r.PageStarts) == 0 || len(r.PageStarts) > maxExportPages || len(r.PageHeights) != len(r.PageStarts):
+		return errors.New("bad pages")
+	}
+	for _, v := range r.Lines {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return errors.New("bad layout")
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------- text stream
+
+// style of a run of text, as Qt shows it
+type textStyle struct {
+	bold, italic, under, strike, mono bool
+	scale                             float64 // relative to the reader's font size
+	link                              string  // http(s) URL or #fragment
+}
+
+// item is one character, picture or rule of the page, in reading order.
+type item struct {
+	r        rune // 0: picture or rule
+	st       textStyle
+	img      string // picture: the JPEG's path
+	imgW     float64
+	imgH     float64
+	rule     bool
+	heading  int    // first character of a heading: its level (1-6)
+	headText string // ... and its text
+	marker   string // first character of a list item: "•" or "3."
+}
+
+func (it *item) space() bool { return it.r != 0 && unicode.IsSpace(it.r) }
+
+// pageStream turns what the reader shows (title, meta line, page HTML)
+// into items. It must count visible characters exactly as Qt does: every
+// non-space character is one, every picture one.
+func pageStream(p *Page) []item {
+	var meta []string
+	if p.Site != "" {
+		meta = append(meta, html.EscapeString(p.Site))
+	}
+	if p.Byline != "" {
+		meta = append(meta, html.EscapeString(p.Byline))
+	}
+	if !p.Secure {
+		meta = append(meta, "<b>not secure (http)</b>")
+	}
+	if !p.Reader {
+		meta = append(meta, "simplified page")
+	}
+	src := "<h1>" + html.EscapeString(p.Title) + "</h1><p><small>" + strings.Join(meta, " · ") + "</small></p>" + p.HTML
+	nodes, err := html.ParseFragment(strings.NewReader(src), &html.Node{Type: html.ElementNode, Data: "div", DataAtom: atom.Div})
+	if err != nil {
+		return nil
+	}
+	s := &streamer{}
+	for _, n := range nodes {
+		s.walk(n, textStyle{scale: 1})
+	}
+	return s.items
+}
+
+type streamer struct {
+	items   []item
+	pre     int
+	lists   []int // counters of the open lists (-1: bullets)
+	pending *item // marker/heading waiting for the next visible character
+}
+
+var headingScale = map[int]float64{1: 2, 2: 1.5, 3: 1.2, 4: 1, 5: 0.8, 6: 1}
+
+func (s *streamer) brk() { s.items = append(s.items, item{r: ' '}) }
+
+func (s *streamer) add(it item) {
+	if s.pending != nil && (it.r == 0 || !unicode.IsSpace(it.r)) {
+		if s.pending.heading > 0 {
+			it.heading, it.headText = s.pending.heading, s.pending.headText
+		}
+		if s.pending.marker != "" {
+			it.marker = s.pending.marker
+		}
+		s.pending = nil
+	}
+	s.items = append(s.items, it)
+}
+
+func (s *streamer) walk(n *html.Node, st textStyle) {
+	switch n.Type {
+	case html.TextNode:
+		for _, r := range n.Data {
+			if s.pre == 0 && unicode.IsSpace(r) {
+				r = ' '
+			}
+			s.add(item{r: r, st: st})
+		}
+		return
+	case html.ElementNode:
+	default:
+		return
+	}
+	block := false
+	switch n.Data {
+	case "h1", "h2", "h3", "h4", "h5", "h6":
+		lvl := int(n.Data[1] - '0')
+		st.bold = true
+		st.scale = headingScale[lvl]
+		block = true
+		s.brk()
+		s.pending = &item{heading: lvl, headText: strings.Join(strings.Fields(textOf(n)), " ")}
+	case "p", "div", "blockquote", "dl", "dt", "dd", "table", "tr", "caption", "figcaption":
+		block = true
+	case "pre":
+		block = true
+		st.mono = true
+		s.pre++
+		defer func() { s.pre-- }()
+	case "ul", "ol":
+		block = true
+		c := -1
+		if n.Data == "ol" {
+			c = 1
+			if v, err := strconv.Atoi(attr(n, "start")); err == nil {
+				c = v
+			}
+		}
+		s.lists = append(s.lists, c)
+		defer func() { s.lists = s.lists[:len(s.lists)-1] }()
+	case "li":
+		block = true
+		s.brk()
+		m := "•"
+		if k := len(s.lists); k > 0 && s.lists[k-1] >= 0 {
+			m = strconv.Itoa(s.lists[k-1]) + "."
+			s.lists[k-1]++
+		}
+		s.pending = &item{marker: m}
+	case "td", "th":
+		s.brk()
+		if n.Data == "th" {
+			st.bold = true
+		}
+	case "br":
+		s.add(item{r: '\n', st: st})
+		return
+	case "hr":
+		s.brk()
+		s.add(item{rule: true})
+		s.brk()
+		return
+	case "img":
+		path := strings.TrimPrefix(attr(n, "src"), "file://")
+		if p, err := url.PathUnescape(path); err == nil {
+			path = p
+		}
+		w, _ := strconv.ParseFloat(attr(n, "width"), 64)
+		h, _ := strconv.ParseFloat(attr(n, "height"), 64)
+		s.add(item{st: st, img: path, imgW: w, imgH: h})
+		return
+	case "b", "strong":
+		st.bold = true
+	case "i", "em":
+		st.italic = true
+	case "u":
+		st.under = true
+	case "s", "del":
+		st.strike = true
+	case "small", "sub", "sup":
+		st.scale *= 0.8
+	case "code":
+		st.mono = true
+	case "a":
+		if h := attr(n, "href"); strings.HasPrefix(h, "http://") || strings.HasPrefix(h, "https://") || strings.HasPrefix(h, "#") {
+			st.link = h
+			st.under = true
+		}
+	case "script", "style", "head", "title":
+		return
+	}
+	if block {
+		s.brk()
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		s.walk(c, st)
+	}
+	if block {
+		s.brk()
+	}
+}
+
+// ---------------------------------------------------------------- PDF
+
+//go:embed fonts/*.ttf
+var fontFS embed.FS
+
+type fontMetrics struct{ asc, desc float64 } // per em
+
+var (
+	sansMetrics  = fontMetrics{1.069, 0.293} // Noto Sans
+	serifMetrics = fontMetrics{1.007, 0.298} // EB Garamond
+)
+
+// ImageReader reads one of the reader's pictures (an absolute path from
+// the page HTML).
+type ImageReader func(path string) ([]byte, error)
+
+// buildPDF draws the page as the reader laid it out.
+func buildPDF(w io.Writer, p *Page, req ExportRequest, readImage ImageReader) (err error) {
+	defer func() { // a bug in the PDF library must not take the browser down
+		if r := recover(); r != nil {
+			err = fmt.Errorf("PDF library: %v", r)
+		}
+	}()
+	if err = req.check(); err != nil {
+		return err
+	}
 	pdf := fpdf.NewCustom(&fpdf.InitType{UnitStr: "pt", Size: fpdf.SizeType{Wd: req.Width, Ht: req.Height}})
 	pdf.SetMargins(0, 0, 0)
 	pdf.SetAutoPageBreak(false, 0)
 	pdf.SetCompression(true)
-	if b, err := fontFS.ReadFile("fonts/NotoSans-Regular.ttf"); err == nil {
-		pdf.AddUTF8FontFromBytes("sans", "", b) // for the outline (bookmarks)
-		pdf.SetFont("sans", "", 12)
+	family, faces := "NotoSans", map[string]string{"": "NotoSans-Regular", "B": "NotoSans-Bold", "I": "NotoSans-Italic", "BI": "NotoSans-BoldItalic"}
+	metrics := sansMetrics
+	if req.Serif {
+		family, faces = "EBGaramond", map[string]string{"": "EBGaramond-Regular", "B": "EBGaramond-Bold", "I": "EBGaramond-Italic", "BI": "EBGaramond-BoldItalic"}
+		metrics = serifMetrics
 	}
-	title := strings.Join(strings.Fields(req.Title), " ") // metadata and outline keep commas and slashes
+	for style, name := range faces {
+		b, err := fontFS.ReadFile("fonts/" + name + ".ttf")
+		if err != nil {
+			return err
+		}
+		pdf.AddUTF8FontFromBytes(family, style, b)
+	}
+	if family != "NotoSans" { // page numbers
+		b, _ := fontFS.ReadFile("fonts/NotoSans-Regular.ttf")
+		pdf.AddUTF8FontFromBytes("NotoSans", "", b)
+	}
+	title := strings.Join(strings.Fields(p.Title), " ")
 	if title == "" {
-		title = cleanTitle("")
+		title = "Web page"
 	}
 	pdf.SetTitle(title, true)
-	pdf.SetSubject(req.URL, true)
+	pdf.SetSubject(p.URL, true)
+	pdf.SetAuthor(strings.Join(strings.Fields(p.Byline), " "), true)
 	pdf.SetCreator("rm-browser", true)
 	pdf.SetCreationDate(time.Now())
 
-	// bookmark levels must start at 0 and go down one at a time
-	minLevel := 99
-	for _, h := range req.Headings {
-		if h.Level > 0 && h.Level < minLevel {
-			minLevel = h.Level
-		}
+	type op struct {
+		y     float64 // in the text
+		h     float64
+		x     float64
+		items []item
 	}
-	for i, data := range pages {
-		img, err := pageImage(data)
-		if err != nil {
-			return fmt.Errorf("page %d: %w", i+1, err)
+	nPages := len(req.PageStarts)
+	ops := make([][]op, nPages)
+	pageOf := func(y float64) int {
+		i := 0
+		for i+1 < nPages && req.PageStarts[i+1] <= y+0.5 {
+			i++
 		}
-		pdf.AddPage()
-		name := fmt.Sprintf("p%d", i)
-		var enc bytes.Buffer
-		if err := (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&enc, img); err != nil {
-			return err
+		return i
+	}
+
+	// hand out the characters line by line
+	items := pageStream(p)
+	pos := 0
+	for l := 0; l+3 < len(req.Lines); l += 4 {
+		n, y, h, x := int(req.Lines[l]), req.Lines[l+1], req.Lines[l+2], req.Lines[l+3]
+		for pos < len(items) && items[pos].space() {
+			pos++
 		}
-		pdf.RegisterImageOptionsReader(name, fpdf.ImageOptions{ImageType: "PNG"}, &enc)
-		b := img.Bounds()
-		pdf.ImageOptions(name, req.X, req.Y, float64(b.Dx()), float64(b.Dy()), false, fpdf.ImageOptions{ImageType: "PNG"}, 0, "")
-		if i == 0 {
-			pdf.Bookmark(title, 0, 0)
-		}
-		last := 0
-		for _, h := range req.Headings {
-			if h.Page != i || strings.TrimSpace(h.Text) == "" {
+		start := pos
+		if n == 0 {
+			if pos < len(items) && items[pos].rule {
+				pos++
+			} else {
 				continue
 			}
-			lvl := 1 + h.Level - minLevel
-			if lvl > last+1 {
-				lvl = last + 1
-			}
-			if lvl < 1 {
-				lvl = 1
-			}
-			pdf.Bookmark(strings.Join(strings.Fields(h.Text), " "), lvl, 0)
-			last = lvl
 		}
+		for count := 0; count < n && pos < len(items); pos++ {
+			if !items[pos].space() && !items[pos].rule {
+				count++
+			}
+		}
+		if pos > start {
+			pg := pageOf(y)
+			ops[pg] = append(ops[pg], op{y, h, x, items[start:pos]})
+		}
+	}
+	for pos < len(items) && (items[pos].space() || items[pos].rule) {
+		pos++
+	}
+	if pos < len(items) {
+		return fmt.Errorf("layout and text don't match (%d of %d characters placed)", pos, len(items))
+	}
+
+	// links to places in the page (#fragment): to the heading's page
+	fragLinks := map[string]int{}
+	headingIDs := map[string][]string{} // heading text -> fragments
+	for _, hd := range p.Headings {
+		if hd.ID != "" {
+			t := strings.Join(strings.Fields(hd.Text), " ")
+			headingIDs[t] = append(headingIDs[t], hd.ID)
+		}
+	}
+	linkFor := func(frag string) int {
+		if id, ok := fragLinks[frag]; ok {
+			return id
+		}
+		id := pdf.AddLink()
+		fragLinks[frag] = id
+		return id
+	}
+
+	base := req.FontSize
+	setFont := func(st textStyle) float64 {
+		size := math.Round(base * st.scale)
+		style := ""
+		if st.bold {
+			style += "B"
+		}
+		if st.italic {
+			style += "I"
+		}
+		size2 := size
+		if st.mono {
+			size2 = math.Round(size * 0.85)
+		}
+		pdf.SetFont(family, style, size2)
+		return size2
+	}
+	minLevel := 9
+	for _, ls := range ops {
+		for _, o := range ls {
+			for _, it := range o.items {
+				if it.heading > 1 && it.heading < minLevel {
+					minLevel = it.heading
+				}
+			}
+		}
+	}
+
+	for pg := 0; pg < nPages; pg++ {
+		pdf.AddPage()
+		top, height := req.PageStarts[pg], req.PageHeights[pg]
+		pdf.ClipRect(0, req.Y, req.Width, height, false)
+		lastLevel := 0
+		for _, o := range ops[pg] {
+			y := req.Y + (o.y - top)
+			// the line's baseline: below the tallest font's ascent
+			maxScale := 0.0
+			for _, it := range o.items {
+				if it.r != 0 && !it.space() && it.st.scale > maxScale {
+					maxScale = it.st.scale
+				}
+			}
+			if maxScale == 0 {
+				maxScale = 1
+			}
+			baseline := y + metrics.asc*math.Round(base*maxScale)
+			x := req.X + o.x
+			for i := 0; i < len(o.items); {
+				it := o.items[i]
+				switch {
+				case it.rule:
+					pdf.SetDrawColor(0, 0, 0)
+					pdf.SetLineWidth(1)
+					pdf.Line(req.X, y+o.h/2, req.X+(req.Width-2*req.X), y+o.h/2)
+					i++
+					continue
+				case it.img != "":
+					if b, err := readImage(it.img); err == nil {
+						name := it.img
+						info := pdf.RegisterImageOptionsReader(name, fpdf.ImageOptions{ImageType: "JPG"}, bytes.NewReader(b))
+						if info != nil && !pdf.Err() {
+							iw, ih := it.imgW, it.imgH
+							if iw <= 0 || ih <= 0 {
+								iw, ih = info.Width(), info.Height()
+							}
+							link, linkStr := 0, ""
+							if strings.HasPrefix(it.st.link, "#") {
+								link = linkFor(it.st.link[1:])
+							} else {
+								linkStr = it.st.link
+							}
+							pdf.ImageOptions(name, x, y, iw, ih, false, fpdf.ImageOptions{ImageType: "JPG"}, link, linkStr)
+							x += iw
+						}
+						if pdf.Err() { // a bad picture is left out, not the whole PDF
+							pdf.ClearError()
+						}
+					}
+					i++
+					continue
+				}
+				if it.heading > 0 {
+					lvl := 0
+					if it.heading > 1 {
+						lvl = 1 + it.heading - minLevel
+						if lvl > lastLevel+1 {
+							lvl = lastLevel + 1
+						}
+					}
+					text := it.headText
+					if text == "" {
+						text = title
+					}
+					pdf.Bookmark(text, lvl, y)
+					lastLevel = lvl
+					for _, frag := range headingIDs[text] {
+						pdf.SetLink(linkFor(frag), y, -1)
+					}
+				}
+				if it.marker != "" {
+					setFont(textStyle{scale: it.st.scale})
+					mw := pdf.GetStringWidth(it.marker)
+					gap := 0.35 * base
+					pdf.SetTextColor(0, 0, 0)
+					pdf.Text(x-gap-mw, baseline, it.marker)
+				}
+				// a run of characters in one style
+				j := i
+				var run strings.Builder
+				for j < len(o.items) && o.items[j].r != 0 && o.items[j].st == it.st && (j == i || (o.items[j].heading == 0 && o.items[j].marker == "")) {
+					r := o.items[j].r
+					if r == '\n' {
+						r = ' '
+					}
+					if r > 0xFFFF {
+						r = '?' // fpdf's fonts cover the Basic Multilingual Plane only
+					}
+					run.WriteRune(r)
+					j++
+				}
+				txt := run.String()
+				size := setFont(it.st)
+				wd := pdf.GetStringWidth(txt)
+				pdf.SetTextColor(0, 0, 0)
+				pdf.Text(x, baseline, txt)
+				if it.st.under {
+					pdf.SetLineWidth(math.Max(1, size/16))
+					pdf.SetDrawColor(0, 0, 0)
+					uy := baseline + size*0.12
+					pdf.Line(x, uy, x+wd, uy)
+				}
+				if it.st.strike {
+					pdf.SetLineWidth(math.Max(1, size/16))
+					sy := baseline - size*0.3
+					pdf.Line(x, sy, x+wd, sy)
+				}
+				if it.st.link != "" {
+					lh := o.h
+					if strings.HasPrefix(it.st.link, "#") {
+						pdf.Link(x, y, wd, lh, linkFor(it.st.link[1:]))
+					} else {
+						pdf.LinkString(x, y, wd, lh, it.st.link)
+					}
+				}
+				x += wd
+				i = j
+			}
+		}
+		pdf.ClipEnd()
+		// page number, where the reader shows it
+		pdf.SetFont("NotoSans", "", 22)
+		pdf.SetTextColor(0x55, 0x55, 0x55)
+		num := fmt.Sprintf("%d / %d", pg+1, nPages)
+		pdf.Text((req.Width-pdf.GetStringWidth(num))/2, req.Height-22-0.293*22, num)
 		if pdf.Err() {
 			return pdf.Error()
 		}
 	}
 	return pdf.Output(w)
-}
-
-// pageImage decodes a captured page and flattens it onto white; pages
-// without colour become grey scale (a third of the size).
-func pageImage(data []byte) (image.Image, error) {
-	cfg, err := png.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	if cfg.Width < 1 || cfg.Height < 1 || cfg.Width > maxPageSide || cfg.Height > maxPageSide {
-		return nil, errors.New("bad page image size")
-	}
-	src, err := png.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	b := src.Bounds()
-	rgba := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	draw.Draw(rgba, rgba.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
-	draw.Draw(rgba, rgba.Bounds(), src, b.Min, draw.Over)
-	grey := true
-	for i := 0; i < len(rgba.Pix) && grey; i += 4 {
-		p := rgba.Pix[i : i+3 : i+3]
-		grey = p[0] == p[1] && p[1] == p[2]
-	}
-	if !grey {
-		return rgba, nil
-	}
-	g := image.NewGray(rgba.Bounds())
-	for i, j := 0, 0; i < len(rgba.Pix); i, j = i+4, j+1 {
-		g.Pix[j] = rgba.Pix[i]
-	}
-	return g, nil
 }
 
 // cleanTitle makes a page title usable as a document name: one line, no

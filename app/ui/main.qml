@@ -32,7 +32,7 @@ Rectangle {
         setTextTimer.stop()
         viewportTimer.stop()
         toastTimer.stop()
-        captureTimer.stop()
+        exportTimer.stop()
         exporting = false
         exportStatus = ""
         Qt.inputMethod.hide()
@@ -201,15 +201,14 @@ Rectangle {
     function showToast(t) { toast = t; toastTimer.restart() }
 
     // ------------------------------------------------------------ save as PDF
-    // Works like printing: every page is captured exactly as the reader
-    // shows it (fonts, size, page breaks) into the export folder, the
-    // backend makes one PDF of them, and rm-librarian (a xovi extension)
-    // files it in the library folder "Web". Saving again makes a new
-    // document ("Title (2)", ...), it never replaces one.
+    // Works like printing: the PDF gets the same pages with the same lines
+    // as the reader, in real text. The frontend sends how Qt laid the page
+    // out (per line: visible characters, position, height; where pages
+    // start), the backend draws it with the same fonts, and rm-librarian
+    // (a xovi extension) files it in the library folder "Web". Saving
+    // again makes a new document ("Title (2)", ...), it never replaces one.
     property bool exporting: false
     property string exportStatus: ""     // full-screen message while saving, or an error
-    property int exportPage: 0
-    property int exportReturnPage: 0
     property var librarianObj: null
     readonly property string libraryFolder: "Web"
 
@@ -238,10 +237,8 @@ Rectangle {
     }
     function exportFail(msg) {
         exporting = false
-        pageIndex = Math.min(exportReturnPage, pageCount - 1)
         exportStatus = "Could not save the PDF.\n\n" + msg
         send(reqExported)
-        wipeExport()
     }
     function startExport() {
         if (exporting || view !== "page" || !pageData || !appState.exportDir) return
@@ -252,41 +249,35 @@ Rectangle {
             return
         }
         exporting = true
-        exportReturnPage = pageIndex
-        exportPage = 0
-        captureNext()
+        exportStatus = "Saving PDF \u2026"
+        exportTimer.restart()    // let the message show first
     }
-    function captureNext() {
-        if (!exporting) return
-        if (exportPage >= pageCount) { captureDone(); return }
-        exportStatus = "Saving PDF \u2026\npage " + (exportPage + 1) + " of " + pageCount
-        pageIndex = exportPage     // shown under the message, captured off screen
-        captureTimer.restart()
-    }
-    Timer {
-        id: captureTimer
-        interval: 60
-        onTriggered: {
-            const file = appState.exportDir + "/p" + exportPage + ".png"
-            const ok = readerArea.grabToImage(function (r) {
-                if (!exporting) return
-                if (!r.saveToFile(file)) { exportFail("The page could not be captured."); return }
-                exportPage++
-                captureNext()
-            })
-            if (!ok) exportFail("The page could not be captured.")
+    Timer { id: exportTimer; interval: 50; onTriggered: if (exporting) send(reqSavePDF, exportLayout()) }
+
+    // How Qt laid out the page: for every line on screen the number of
+    // visible characters (pictures count one), its y, height and x.
+    function exportLayout() {
+        const lines = []
+        const len = te.length
+        let p = 0, lastY = -1
+        for (let guard = 0; p < len && guard < 200000; guard++) {
+            const r = te.positionToRectangle(p)
+            // the end of this line; never skip a character: where a line
+            // breaks after a hyphen, Qt's line end is before the hyphen,
+            // which then becomes a piece of its own (drawn at its own x)
+            let e = te.positionAt(te.width + 1000, r.y + r.height / 2)
+            if (e <= p) e = p + 1
+            const vis = Array.from(te.getText(p, e).replace(/\s/g, "")).length
+            if (vis > 0 || r.y !== lastY) {   // empty lines and rules count, trailing blanks don't
+                lines.push(vis, Math.round(r.y * 2) / 2, Math.round(r.height * 2) / 2, Math.round(r.x))
+                lastY = r.y
+            }
+            p = e
         }
-    }
-    function captureDone() {
-        pageIndex = exportReturnPage
-        exportStatus = "Saving PDF \u2026\nputting the pages together"
-        const hs = []
-        const heads = pageData.headings || []
-        for (let i = 0; i < heads.length; i++)
-            if (headingPages[i] >= 0) hs.push({ text: heads[i].text, level: heads[i].level, page: headingPages[i] })
-        send(reqSavePDF, { pages: pageCount, title: pageData.title || "", url: pageData.url || "",
-                           width: Math.round(root.width), height: Math.round(root.height),
-                           x: Math.round(readerArea.x), y: Math.round(readerArea.y), headings: hs })
+        return { url: pageData.url || "", fontSize: settings.fontSize || 32, serif: !!settings.serif,
+                 width: Math.round(root.width), height: Math.round(root.height),
+                 x: Math.round(readerArea.x), y: Math.round(readerArea.y),
+                 lines: lines, pageStarts: pageStarts, pageHeights: pageHeights }
     }
     // the backend's answer: import the PDF into the library
     function pdfReady(d) {
@@ -314,20 +305,8 @@ Rectangle {
         exporting = false
         exportStatus = ""
         send(reqExported)
-        wipeExport()
         showToast("Saved to " + libraryFolder + ": " + name)
     }
-    // Overwrites the captured pages with an empty image (QML can't delete
-    // files; they are in RAM and gone after a restart anyway).
-    property int exportWipeCount: 0
-    function wipeExport() {
-        const n = Math.max(exportPage, pageCount)
-        if (!appState.exportDir || n < 1) return
-        blankItem.grabToImage(function (r) {
-            for (let i = 0; i < n + 2; i++) r.saveToFile(appState.exportDir + "/p" + i + ".png")
-        })
-    }
-    Item { id: blankItem; width: 1; height: 1 }
 
     // ------------------------------------------------------------ navigation
     function openInput(text) {
@@ -1271,9 +1250,9 @@ Rectangle {
             }
             EButton {
                 Layout.alignment: Qt.AlignHCenter
-                visible: exporting && exportPage < pageCount
+                visible: exporting
                 text: "Cancel"
-                onClicked: exportFail("Cancelled.")
+                onClicked: { exporting = false; exportStatus = ""; send(reqExported) }
             }
         }
     }
