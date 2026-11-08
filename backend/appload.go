@@ -28,8 +28,13 @@ const (
 
 type AppLoad struct {
 	fd      int
+	maxBody int // largest message the socket takes in one record
 	writeMu sync.Mutex
 }
+
+// sendBuffer is what we ask for: big pages are sent as one message. The
+// kernel's default (about 200 kB) is too small for long articles.
+const sendBuffer = 16 << 20
 
 func ConnectAppLoad(path string) (*AppLoad, error) {
 	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_SEQPACKET, 0)
@@ -40,7 +45,19 @@ func ConnectAppLoad(path string) (*AppLoad, error) {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("connect %s: %w", path, err)
 	}
-	return &AppLoad{fd: fd}, nil
+	// SO_SNDBUFFORCE works as root, i.e. before the sandbox; else try the
+	// normal option, which the kernel caps at net.core.wmem_max.
+	if err := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_SNDBUFFORCE, sendBuffer); err != nil {
+		_ = syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_SNDBUF, sendBuffer)
+	}
+	maxBody := 200 << 10
+	if n, err := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_SNDBUF); err == nil && n > 4096 {
+		maxBody = n - 4096 // the kernel keeps some of it for bookkeeping
+	}
+	if maxBody > maxMessageLength {
+		maxBody = maxMessageLength
+	}
+	return &AppLoad{fd: fd, maxBody: maxBody}, nil
 }
 
 func (a *AppLoad) Close() error { return syscall.Close(a.fd) }
@@ -74,11 +91,15 @@ func (a *AppLoad) Receive() (int32, string, error) {
 	return typ, string(body[:n]), nil
 }
 
+// ErrTooLarge: the message doesn't fit into one socket record. Nothing was
+// sent (a header without its body would confuse the frontend).
+var ErrTooLarge = errors.New("message too large")
+
 // Send is safe for concurrent use.
 func (a *AppLoad) Send(typ int32, contents string) error {
 	body := []byte(contents)
-	if len(body) > maxMessageLength {
-		return fmt.Errorf("message too long (%d bytes)", len(body))
+	if len(body) > a.maxBody {
+		return fmt.Errorf("%w (%d bytes, at most %d)", ErrTooLarge, len(body), a.maxBody)
 	}
 	hdr := make([]byte, 8)
 	binary.LittleEndian.PutUint32(hdr[0:4], uint32(typ))

@@ -212,6 +212,9 @@ func (a *App) send(typ int, v any) {
 	}
 	if err := a.al.Send(int32(typ), mustJSON(v)); err != nil {
 		log.Printf("send %d: %v", typ, err)
+		if errors.Is(err, ErrTooLarge) && typ == resPage {
+			_ = a.al.Send(resError, mustJSON(map[string]any{"message": "This page is too large to show.", "retry": false}))
+		}
 	}
 }
 
