@@ -54,7 +54,7 @@ Rectangle {
     readonly property int reqCancel: 12
     readonly property int reqViewport: 13
 
-    property var appState: ({ settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false },
+    property var appState: ({ settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false, greyImages: false },
                               history: [], canBack: false, canForward: false, sandbox: "", version: "" })
     readonly property var settings: appState.settings || {}
     property string view: "home"        // home | page | search | error
@@ -1008,6 +1008,8 @@ Rectangle {
                 spacing: 16
                 EButton { text: "Show"; active: !settings.noImages; onClicked: send(reqSettings, { noImages: false }) }
                 EButton { text: "Hide"; active: !!settings.noImages; onClicked: send(reqSettings, { noImages: true }) }
+                EButton { text: "Colour"; visible: !settings.noImages; active: !settings.greyImages; onClicked: send(reqSettings, { greyImages: false }) }
+                EButton { text: "Grey"; visible: !settings.noImages; active: !!settings.greyImages; onClicked: send(reqSettings, { greyImages: true }) }
             }
             Text { text: "Safe search (DuckDuckGo)"; font.pixelSize: 30; font.bold: true }
             RowLayout {

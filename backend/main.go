@@ -31,7 +31,7 @@ const (
 	reqForward    = 6  // history forward
 	reqPosition   = 7  // {page}: reading position of the current entry
 	reqClearData  = 8  // delete history, cookies, cache
-	reqSettings   = 9  // {fontSize, serif, safeSearch, noImages}
+	reqSettings   = 9  // {fontSize, serif, safeSearch, noImages, greyImages}
 	reqHome       = 10 // go to the start screen
 	reqReload     = 11 // load the current entry again, bypassing the cache
 	reqCancel     = 12 // stop loading
@@ -55,6 +55,7 @@ type Settings struct {
 	Serif      bool   `json:"serif"`
 	SafeSearch string `json:"safeSearch"` // moderate | strict | off
 	NoImages   bool   `json:"noImages"`
+	GreyImages bool   `json:"greyImages"` // default: colour
 }
 
 // Entry is one step in the tab's history.
@@ -342,6 +343,7 @@ func (a *App) handle(typ int, contents string) {
 		Serif      *bool   `json:"serif"`
 		SafeSearch *string `json:"safeSearch"`
 		NoImages   *bool   `json:"noImages"`
+		GreyImages *bool   `json:"greyImages"`
 	}
 	if contents != "" {
 		if err := json.Unmarshal([]byte(contents), &req); err != nil {
@@ -423,6 +425,10 @@ func (a *App) handle(typ int, contents string) {
 		imagesChanged := req.NoImages != nil && *req.NoImages != s.NoImages
 		if req.NoImages != nil {
 			s.NoImages = *req.NoImages
+		}
+		if req.GreyImages != nil && *req.GreyImages != s.GreyImages {
+			s.GreyImages = *req.GreyImages
+			imagesChanged = true
 		}
 		a.saveLocked()
 		a.mu.Unlock()
@@ -573,7 +579,8 @@ func (a *App) loadPage(ctx context.Context, gen int, e Entry, reload bool) {
 	a.mu.Lock()
 	vw, vh := a.vpW, a.vpH
 	noImages := a.cfg.Settings.NoImages
-	key := fmt.Sprintf("%s|%d|%d|%v", e.URL, vw, vh, noImages)
+	grey := a.cfg.Settings.GreyImages
+	key := fmt.Sprintf("%s|%d|%d|%v|%v", e.URL, vw, vh, noImages, grey)
 	cp := a.cache[key]
 	a.mu.Unlock()
 
@@ -600,7 +607,7 @@ func (a *App) loadPage(ctx context.Context, gen int, e Entry, reload bool) {
 		var imgs ImageFunc
 		if !noImages {
 			imgs = func(ctx context.Context, src string) (string, int, int, bool) {
-				return a.prepareImage(ctx, src, vw, vh)
+				return a.prepareImage(ctx, src, vw, vh, grey)
 			}
 		}
 		a.busy(true, "Preparing "+f.URL.Hostname()+" …")

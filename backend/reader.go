@@ -10,7 +10,7 @@ package main
 //  2. bluemonday sanitizes the result with a strict allowlist: only
 //     text-level tags survive, links only with http(s) / mailto addresses.
 //  3. The sanitized tree is written out as the HTML subset Qt's rich text
-//     engine understands, with images downloaded, converted to grey scale
+//     engine understands, with images downloaded, re-encoded
 //     and sized to fit one screen.
 //
 // The site's navigation menus are collected separately and shown in the

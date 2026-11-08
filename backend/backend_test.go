@@ -211,28 +211,37 @@ func TestConvertImage(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, src)
-	out, w, h, err := convertImage(buf.Bytes(), 860, 1400)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w != 860 || h != 430 {
-		t.Errorf("size %dx%d", w, h)
-	}
-	img, format, err := image.Decode(bytes.NewReader(out))
-	if err != nil || format != "jpeg" {
-		t.Fatalf("decode: %v %s", err, format)
-	}
-	if _, ok := img.(*image.Gray); !ok {
-		t.Errorf("want grey JPEG, got %T", img)
+	for _, grey := range []bool{false, true} {
+		out, w, h, err := convertImage(buf.Bytes(), 860, 1400, grey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w != 860 || h != 430 {
+			t.Errorf("size %dx%d", w, h)
+		}
+		img, format, err := image.Decode(bytes.NewReader(out))
+		if err != nil || format != "jpeg" {
+			t.Fatalf("decode: %v %s", err, format)
+		}
+		_, isGrey := img.(*image.Gray)
+		if isGrey != grey {
+			t.Errorf("grey=%v: got %T", grey, img)
+		}
+		if !grey {
+			r, g, b, _ := img.At(430, 215).RGBA()
+			if r == g && g == b {
+				t.Errorf("colour lost: %d %d %d", r, g, b)
+			}
+		}
 	}
 
 	tiny := image.NewNRGBA(image.Rect(0, 0, 1, 1))
 	buf.Reset()
 	_ = png.Encode(&buf, tiny)
-	if _, _, _, err := convertImage(buf.Bytes(), 860, 1400); err == nil {
+	if _, _, _, err := convertImage(buf.Bytes(), 860, 1400, false); err == nil {
 		t.Error("tracking pixel should be dropped")
 	}
-	if _, _, _, err := convertImage([]byte("<svg/>"), 860, 1400); err == nil {
+	if _, _, _, err := convertImage([]byte("<svg/>"), 860, 1400, false); err == nil {
 		t.Error("garbage should fail")
 	}
 }

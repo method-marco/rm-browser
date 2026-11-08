@@ -66,7 +66,7 @@ func livePage(t *testing.T, c *http.Client, u string) *Page {
 		app := &App{store: store, http: c}
 		images = func(ctx context.Context, src string) (string, int, int, bool) {
 			n++
-			return app.prepareImage(ctx, src, 842, 1257) // Paper Pro Move reader area
+			return app.prepareImage(ctx, src, 842, 1257, false) // Paper Pro Move reader area
 		}
 	}
 	pg, err := buildPage(ctx, f, images, 842)

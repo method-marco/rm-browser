@@ -24,8 +24,10 @@ An [AppLoad](https://github.com/asivery/rm-appload) app for reMarkable tablets: 
 - **Clear browsing data:** one button (home screen, menu, Settings) deletes history and searches,
   the back/forward list, cookies, and cached pages and images. Settings stay
 - Settings: text size, font (Noto Sans or EB Garamond, the tablet's own fonts), images on/off,
+  colour or grey,
   safe search
-- Images are converted to grey scale and sized to fit the screen; e-ink-friendly UI (black/white,
+- Images in colour (for the Paper Pro's colour screen) or grey scale (Settings), sized to fit
+  the screen; e-ink-friendly UI (black/white,
   no animations, large touch targets); always full screen
 
 ## Security
@@ -145,7 +147,7 @@ backend/               Go backend -> backend/entry (static, no cgo)
   fetch.go             HTTP client, address-or-search detection
   ddg.go               DuckDuckGo search and autocomplete
   reader.go            Readability + bluemonday + Qt rich text writer
-  images.go            image download, grey scale, resizing
+  images.go            image download, re-encoding, resizing, optional grey scale
   main.go              messages, history, back/forward, clearing data
 tests/qml/             headless frontend tests (stub AppLoad module, Dockerfile)
 packaging/vellum/browser/VELBUILD

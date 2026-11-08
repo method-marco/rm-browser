@@ -1,8 +1,8 @@
 package main
 
 // Images are decoded here, inside the sandbox, by Go's memory-safe
-// decoders, then scaled to fit the screen, turned grey and stored as new
-// JPEG files. The frontend (running in xochitl, as root) only ever opens
+// decoders, then scaled to fit the screen (and turned grey if the user
+// wants that) and stored as new JPEG files. The frontend (running in xochitl, as root) only ever opens
 // these re-encoded files, never what the site sent.
 
 import (
@@ -30,11 +30,11 @@ const (
 
 // prepareImage downloads src and stores it scaled to fit maxW x maxH.
 // It returns the absolute file path and the shown size.
-func (a *App) prepareImage(ctx context.Context, src string, maxW, maxH int) (string, int, int, bool) {
+func (a *App) prepareImage(ctx context.Context, src string, maxW, maxH int, grey bool) (string, int, int, bool) {
 	if maxW < 100 || maxH < 100 {
 		return "", 0, 0, false
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", src, maxW, maxH)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d|%v", src, maxW, maxH, grey)))
 	name := "img/" + hex.EncodeToString(sum[:12]) + ".jpg"
 	if b, err := a.store.cache.ReadFile(name); err == nil {
 		if cfg, err := jpeg.DecodeConfig(bytes.NewReader(b)); err == nil {
@@ -55,7 +55,7 @@ func (a *App) prepareImage(ctx context.Context, src string, maxW, maxH int) (str
 	if err != nil {
 		return "", 0, 0, false
 	}
-	out, w, h, err := convertImage(f.Body, maxW, maxH)
+	out, w, h, err := convertImage(f.Body, maxW, maxH, grey)
 	if err != nil {
 		return "", 0, 0, false
 	}
@@ -68,7 +68,7 @@ func (a *App) prepareImage(ctx context.Context, src string, maxW, maxH int) (str
 	return a.store.cachePath(name), w, h, true
 }
 
-func convertImage(data []byte, maxW, maxH int) ([]byte, int, int, error) {
+func convertImage(data []byte, maxW, maxH int, grey bool) ([]byte, int, int, error) {
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, 0, 0, err
@@ -85,7 +85,10 @@ func convertImage(data []byte, maxW, maxH int) ([]byte, int, int, error) {
 	}
 	b := src.Bounds()
 	w, h := fitSize(b.Dx(), b.Dy(), maxW, maxH)
-	dst := image.NewGray(image.Rect(0, 0, w, h))
+	var dst draw.Image = image.NewRGBA(image.Rect(0, 0, w, h)) // the Paper Pro has a colour screen
+	if grey {
+		dst = image.NewGray(image.Rect(0, 0, w, h))
+	}
 	draw.Draw(dst, dst.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
 	draw.CatmullRom.Scale(dst, dst.Bounds(), src, b, draw.Over, nil)
 	var buf bytes.Buffer
