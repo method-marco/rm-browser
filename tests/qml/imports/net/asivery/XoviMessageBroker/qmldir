@@ -1,0 +1,3 @@
+module net.asivery.XoviMessageBroker
+XoviMessageBroker 2.0 XoviMessageBroker.qml
+singleton Library 2.0 Library.qml

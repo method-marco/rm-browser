@@ -3,6 +3,7 @@ module github.com/method-marco/rm-browser/backend
 go 1.26.0
 
 require (
+	codeberg.org/go-pdf/fpdf v0.12.0
 	codeberg.org/readeck/go-readability/v2 v2.1.3
 	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/landlock-lsm/go-landlock v0.11.0

@@ -38,7 +38,7 @@ var allowedSyscalls = []string{
 	"socket", "connect", "setsockopt", "getsockopt", "getsockname", "getpeername", "epoll_ctl",
 	"epoll_pwait", "uname", "getrandom",
 	// rare paths: restarted calls, netpoll setup, I/O variants, fallbacks
-	"restart_syscall", "epoll_create1", "eventfd2", "readv", "writev", "lseek", "shutdown", "sendto",
+	"restart_syscall", "epoll_create1", "eventfd2", "readv", "writev", "lseek", "ftruncate", "shutdown", "sendto",
 	"recvfrom", "sendmsg", "recvmsg", "renameat2", "faccessat2", "clock_nanosleep", "clock_getres",
 	"getuid", "geteuid", "getgid", "getegid",
 }

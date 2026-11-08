@@ -20,6 +20,11 @@ An [AppLoad](https://github.com/asivery/rm-appload) app for reMarkable tablets: 
 - **DuckDuckGo** search with **autocomplete** while you type, plus matching pages and searches
   from your history. Results are shown page by page, *More results* loads the next batch.
   Type an address (`road.cc`, `https://…`) to open it directly
+- **Save as PDF** (menu): like printing, the page goes into the library folder **Web** exactly as
+  the reader shows it (same fonts, size and page breaks; the headings become the PDF's table of
+  contents). Saving again, e.g. after changing the text size, adds a new document ("Title (2)"),
+  nothing is replaced. Needs the [rm-librarian](https://github.com/rmitchellscott/rm-librarian) xovi
+  extension (`vellum add librarian`), which adds documents to the library without restarting it
 - **One tab.** *Back*, *Forward* and *Home* in the menu
 - **Clear browsing data:** one button (home screen, menu, Settings) deletes history and searches,
   the back/forward list, cookies, and cached pages and images. Settings stay
@@ -76,7 +81,12 @@ other devices; and **only web ports** 80, 443, 8080, 8443.
 Images are decoded inside the sandbox by Go's memory-safe decoders and re-encoded as new JPEG
 files, so the frontend (in xochitl, which runs as root) never opens anything a website sent. The
 frontend checks again that images come only from the backend's image folder and links are only
-`http(s)`. The image cache is capped at 150 MB. If the sandbox can't be set up, the browser refuses
+`http(s)`. The image cache is capped at 150 MB.
+
+*Save as PDF*: the frontend captures the pages into `/run/rm-browser-export` (in RAM, root's; the
+sandbox can only read it), the backend writes the PDF through a file it opened before dropping
+root, so it can't make root import any other file; librarian then copies it into the library. The
+captured pages are blanked afterwards. If the sandbox can't be set up, the browser refuses
 to run. *Settings* shows the active layers.
 
 ## Privacy
@@ -130,6 +140,7 @@ Then reload AppLoad. The app shows up as **Browser**.
 |---|---|
 | `/home/root/.config/rm-browser/config.json` | settings, history, back/forward list |
 | `/home/root/.cache/rm-browser/` | converted images (at most 150 MB) |
+| `/run/rm-browser-export/` | Save as PDF: captured pages and the PDF while saving (RAM only) |
 | `/home/root/.cache/rm-browser-jail/` | the sandbox's empty root folder (DNS settings only) |
 
 Both folders belong to user `nobody` (the sandbox). Cookies are never written to disk.
@@ -166,6 +177,8 @@ backend/               Go backend -> backend/entry (static, no cgo)
   ddg.go               DuckDuckGo search and autocomplete
   reader.go            Readability + bluemonday + Qt rich text writer
   images.go            image download, re-encoding, resizing, optional grey scale
+  export.go            Save as PDF: captured pages -> PDF (fpdf), export folder
+  fonts/               Noto Sans for the PDF outline (SIL OFL, see OFL-NotoSans.txt)
   main.go              messages, history, back/forward, clearing data
 tests/qml/             headless frontend tests (stub AppLoad module, Dockerfile)
 packaging/vellum/browser/VELBUILD

@@ -32,6 +32,9 @@ Rectangle {
         setTextTimer.stop()
         viewportTimer.stop()
         toastTimer.stop()
+        captureTimer.stop()
+        exporting = false
+        exportStatus = ""
         Qt.inputMethod.hide()
         root.forceActiveFocus()
     }
@@ -56,6 +59,8 @@ Rectangle {
     readonly property int reqCancel: 12
     readonly property int reqViewport: 13
     readonly property int reqClosed: 14
+    readonly property int reqSavePDF: 15
+    readonly property int reqExported: 16
 
     property var appState: ({ settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false, greyImages: false, allowHTTP: false },
                               history: [], canBack: false, canForward: false, sandbox: "", version: "" })
@@ -147,6 +152,7 @@ Rectangle {
                 if (panel !== "settings" && panel !== "confirm") panel = ""
                 break
             case 108: showToast(d.message); break
+            case 109: pdfReady(d); break
             }
         }
     }
@@ -193,6 +199,135 @@ Rectangle {
 
     Timer { id: toastTimer; interval: 4000; onTriggered: toast = "" }
     function showToast(t) { toast = t; toastTimer.restart() }
+
+    // ------------------------------------------------------------ save as PDF
+    // Works like printing: every page is captured exactly as the reader
+    // shows it (fonts, size, page breaks) into the export folder, the
+    // backend makes one PDF of them, and rm-librarian (a xovi extension)
+    // files it in the library folder "Web". Saving again makes a new
+    // document ("Title (2)", ...), it never replaces one.
+    property bool exporting: false
+    property string exportStatus: ""     // full-screen message while saving, or an error
+    property int exportPage: 0
+    property int exportReturnPage: 0
+    property var librarianObj: null
+    readonly property string libraryFolder: "Web"
+
+    function librarian() {
+        if (!librarianObj) {
+            try {
+                librarianObj = Qt.createQmlObject("import net.asivery.XoviMessageBroker 2.0\nXoviMessageBroker {}", root, "librarian")
+            } catch (e) {
+                librarianObj = null
+            }
+        }
+        return librarianObj
+    }
+    function libCall(signal, arg) {
+        const b = librarian()
+        const r = b ? String(b.sendSimpleSignal(signal, arg) || "").trim() : ""
+        if (r === "") throw new Error("Saving PDFs to the library needs the rm-librarian extension. Install it with vellum (vellum add librarian), then restart the tablet's interface.")
+        if (r.indexOf("ERROR") === 0) throw new Error(r.replace(/^ERROR:?\s*/, ""))
+        return r
+    }
+    function docName(t) {
+        let n = String(t || "").replace(/[\/\\]/g, "-").replace(/,/g, "\u201a")
+                               .replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim()
+        if (n.length > 121) n = n.slice(0, 120).trim() + "\u2026"
+        return n || "Web page"
+    }
+    function exportFail(msg) {
+        exporting = false
+        pageIndex = Math.min(exportReturnPage, pageCount - 1)
+        exportStatus = "Could not save the PDF.\n\n" + msg
+        send(reqExported)
+        wipeExport()
+    }
+    function startExport() {
+        if (exporting || view !== "page" || !pageData || !appState.exportDir) return
+        try {
+            libCall("ensureFolder", libraryFolder)   // fails early if librarian is missing
+        } catch (e) {
+            exportStatus = "Could not save the PDF.\n\n" + e.message
+            return
+        }
+        exporting = true
+        exportReturnPage = pageIndex
+        exportPage = 0
+        captureNext()
+    }
+    function captureNext() {
+        if (!exporting) return
+        if (exportPage >= pageCount) { captureDone(); return }
+        exportStatus = "Saving PDF \u2026\npage " + (exportPage + 1) + " of " + pageCount
+        pageIndex = exportPage     // shown under the message, captured off screen
+        captureTimer.restart()
+    }
+    Timer {
+        id: captureTimer
+        interval: 60
+        onTriggered: {
+            const file = appState.exportDir + "/p" + exportPage + ".png"
+            const ok = readerArea.grabToImage(function (r) {
+                if (!exporting) return
+                if (!r.saveToFile(file)) { exportFail("The page could not be captured."); return }
+                exportPage++
+                captureNext()
+            })
+            if (!ok) exportFail("The page could not be captured.")
+        }
+    }
+    function captureDone() {
+        pageIndex = exportReturnPage
+        exportStatus = "Saving PDF \u2026\nputting the pages together"
+        const hs = []
+        const heads = pageData.headings || []
+        for (let i = 0; i < heads.length; i++)
+            if (headingPages[i] >= 0) hs.push({ text: heads[i].text, level: heads[i].level, page: headingPages[i] })
+        send(reqSavePDF, { pages: pageCount, title: pageData.title || "", url: pageData.url || "",
+                           width: Math.round(root.width), height: Math.round(root.height),
+                           x: Math.round(readerArea.x), y: Math.round(readerArea.y), headings: hs })
+    }
+    // the backend's answer: import the PDF into the library
+    function pdfReady(d) {
+        if (!exporting) return            // only answers to our own request
+        if (d.error) { exportFail(d.error); return }
+        if (d.path !== appState.exportDir + "/Web page.pdf") { exportFail("Unexpected file."); return }
+        exportStatus = "Saving PDF \u2026\nadding it to the library"
+        let name = ""
+        try {
+            const folder = libCall("ensureFolder", libraryFolder).split("\n")[0]
+            const base = docName(d.title)
+            name = base
+            for (let k = 2; k < 1000; k++) {      // a new version, never replace
+                let exists = true
+                try { libCall("lookupEntry", libraryFolder + "/" + name) } catch (e) { exists = false }
+                if (!exists) break
+                name = base + " (" + k + ")"
+            }
+            const uuid = libCall("importDocument", d.path + "," + folder).split("\n")[0]
+            libCall("renameEntry", uuid + "," + name)
+        } catch (e) {
+            exportFail(e.message)
+            return
+        }
+        exporting = false
+        exportStatus = ""
+        send(reqExported)
+        wipeExport()
+        showToast("Saved to " + libraryFolder + ": " + name)
+    }
+    // Overwrites the captured pages with an empty image (QML can't delete
+    // files; they are in RAM and gone after a restart anyway).
+    property int exportWipeCount: 0
+    function wipeExport() {
+        const n = Math.max(exportPage, pageCount)
+        if (!appState.exportDir || n < 1) return
+        blankItem.grabToImage(function (r) {
+            for (let i = 0; i < n + 2; i++) r.saveToFile(appState.exportDir + "/p" + i + ".png")
+        })
+    }
+    Item { id: blankItem; width: 1; height: 1 }
 
     // ------------------------------------------------------------ navigation
     function openInput(text) {
@@ -774,6 +909,7 @@ Rectangle {
                 EButton { text: "A-"; visible: view === "page"; enabled: (settings.fontSize || 32) > 22; onClicked: setFont((settings.fontSize || 32) - 4, !!settings.serif) }
                 EButton { text: "A+"; visible: view === "page"; enabled: (settings.fontSize || 32) < 56; onClicked: setFont((settings.fontSize || 32) + 4, !!settings.serif) }
                 EButton { text: settings.serif ? "Sans" : "Serif"; visible: view === "page"; onClicked: setFont(settings.fontSize || 32, !settings.serif) }
+                EButton { text: "Save as PDF"; visible: view === "page" && !!appState.exportDir; onClicked: { menuOpen = false; startExport() } }
                 EButton { text: "Reload"; visible: view !== "home"; onClicked: { menuOpen = false; send(reqReload) } }
                 EButton { text: "Settings"; onClicked: { panel = "settings"; menuOpen = false } }
                 EButton { text: "Clear data"; onClicked: { panel = "confirm"; menuOpen = false } }
@@ -1108,5 +1244,37 @@ Rectangle {
             text: toast; color: "white"; font.pixelSize: 26; wrapMode: Text.Wrap
         }
         MouseArea { anchors.fill: parent; onClicked: toast = "" }
+    }
+
+    // ------------------------------------------------------------ PDF export message
+    Rectangle {
+        visible: exportStatus !== ""
+        anchors.fill: parent
+        color: "white"
+        MouseArea { anchors.fill: parent }   // nothing underneath reacts while saving
+        ColumnLayout {
+            anchors.centerIn: parent
+            width: parent.width - 120
+            spacing: 40
+            Text {
+                Layout.fillWidth: true
+                text: exportStatus
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                font.pixelSize: 32
+            }
+            EButton {
+                Layout.alignment: Qt.AlignHCenter
+                visible: !exporting
+                text: "OK"
+                onClicked: exportStatus = ""
+            }
+            EButton {
+                Layout.alignment: Qt.AlignHCenter
+                visible: exporting && exportPage < pageCount
+                text: "Cancel"
+                onClicked: exportFail("Cancelled.")
+            }
+        }
     }
 }

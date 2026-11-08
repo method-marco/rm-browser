@@ -3,6 +3,7 @@
 import QtQuick 2.15
 import QtTest 1.2
 import net.asivery.AppLoad 1.0
+import net.asivery.XoviMessageBroker 2.0
 
 Item {
     id: win
@@ -236,6 +237,89 @@ Item {
             Bus.deliver(102, { message: "cannot find example.invalid (no Wi-Fi, or the address is wrong)", retry: true })
             compare(app.view, "error")
             shot("error")
+        }
+
+        function findButton(item, label) {
+            if (!item) return null
+            if (item.visible && item.text === label && item.clicked !== undefined) return item
+            for (let i = 0; i < item.children.length; i++) {
+                const f = findButton(item.children[i], label)
+                if (f) return f
+            }
+            return null
+        }
+        function tapButton(label) {
+            const b = findButton(app, label)
+            verify(b, "button " + label)
+            const p = b.mapToItem(app, b.width / 2, b.height / 2)
+            mouseClick(app, p.x, p.y)
+        }
+        function imageSize(file) {
+            const img = Qt.createQmlObject("import QtQuick 2.15; Image { cache: false; asynchronous: false }", tc)
+            img.source = "file://" + file
+            const r = img.status === Image.Ready ? [img.sourceSize.width, img.sourceSize.height] : null
+            img.destroy()
+            return r
+        }
+        function exportOnce(expectName) {
+            app.menuOpen = true
+            wait(50)
+            Bus.clear()
+            tapButton("Save as PDF")
+            tryVerify(function () { return Bus.lastOf(15) !== null }, 20000, "pages captured")
+            const req = Bus.lastOf(15)
+            compare(req.pages, app.pageCount)
+            compare(req.width, win.width); compare(req.height, win.height)
+            compare(req.x, 56); compare(req.y, 48)
+            verify(req.headings.length > 0 && req.headings[1].page > 0, JSON.stringify(req.headings))
+            compare(app.pageIndex, 2, "back on the page the reader was on")
+            compare(Bus.lastOf(7), null, "capturing doesn't move the reading position")
+            const dir = outDir + "export"
+            const first = imageSize(dir + "/p0.png"), last = imageSize(dir + "/p" + (req.pages - 1) + ".png")
+            verify(first && last, "page images written")
+            compare(first[0], Math.round(findChild(app, "readerArea").width))
+            shot("pdf-saving")
+            Bus.deliver(109, { path: dir + "/Web page.pdf", title: "A Long Test Story" })
+            verify(!app.exporting && app.exportStatus === "", app.exportStatus)
+            compare(Library.docs[Library.docs.length - 1], expectName)
+            compare(Library.imported[Library.imported.length - 1], dir + "/Web page.pdf")
+            verify(app.toast.indexOf("Saved to Web: " + expectName) === 0, app.toast)
+            verify(Bus.lastOf(16) !== null, "export file emptied")
+            tryVerify(function () { const s = imageSize(dir + "/p0.png"); return s && s[0] === 1 }, 3000, "page images wiped")
+        }
+
+        function test_12_save_pdf() {
+            Library.reset()
+            Bus.deliver(101, state({ exportDir: outDir + "export" }))
+            showArticle(2, 30)
+            exportOnce("A Long Test Story")
+            exportOnce("A Long Test Story (2)")          // a new version, never replaced
+            compare(Library.docs.length, 2)
+
+            // answers nobody asked for are ignored
+            const calls = Library.calls.length
+            Bus.deliver(109, { path: outDir + "export/Web page.pdf", title: "Injected" })
+            compare(Library.calls.length, calls)
+
+            // a path other than the export file is refused
+            app.menuOpen = true; wait(50); Bus.clear()
+            tapButton("Save as PDF")
+            tryVerify(function () { return Bus.lastOf(15) !== null }, 20000)
+            Bus.deliver(109, { path: "/home/root/.ssh/id_rsa", title: "x" })
+            verify(app.exportStatus.indexOf("Could not save") === 0, app.exportStatus)
+            compare(Library.imported.length, 2)
+            tapButton("OK")
+            compare(app.exportStatus, "")
+
+            // without rm-librarian: a clear message, nothing captured
+            Library.installed = false
+            app.menuOpen = true; wait(50); Bus.clear()
+            tapButton("Save as PDF")
+            verify(app.exportStatus.indexOf("rm-librarian") > 0, app.exportStatus)
+            compare(Bus.lastOf(15), null)
+            shot("pdf-no-librarian")
+            tapButton("OK")
+            Library.installed = true
         }
     }
 }

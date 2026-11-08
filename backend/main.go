@@ -37,6 +37,8 @@ const (
 	reqCancel     = 12 // stop loading
 	reqViewport   = 13 // {width, height}
 	reqClosed     = 14 // the app was closed: forget cookies and connections
+	reqSavePDF    = 15 // ExportRequest: the reader pages were captured, build the PDF
+	reqExported   = 16 // the PDF is in the library (or failed): empty it
 )
 
 // Message types backend -> frontend.
@@ -49,6 +51,7 @@ const (
 	resBusy    = 106
 	resHome    = 107
 	resInfo    = 108 // {message}
+	resPDF     = 109 // {path, title}: the PDF is ready to be imported
 )
 
 type Settings struct {
@@ -112,6 +115,8 @@ type App struct {
 	searchQ     string
 	suggestStop context.CancelFunc
 
+	export *Export // nil: Save as PDF unavailable
+
 	sendHook func(typ int, v any) // tests: receives messages instead of AppLoad
 }
 
@@ -136,7 +141,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	sandbox, err := enterSandbox(jailDir(cacheDir), cfgDir, cacheDir)
+	// The export folder (Save as PDF) stays root's: opened now, then only
+	// read through its handle and written through the PDF's descriptor.
+	export, err := openExport(exportDirPath())
+	if err != nil {
+		log.Printf("export folder: %v (Save as PDF is off)", err)
+		export = nil
+	}
+	var readOnly []string
+	if export != nil {
+		readOnly = append(readOnly, export.dir)
+	}
+	sandbox, err := enterSandbox(jailDir(cacheDir), readOnly, cfgDir, cacheDir)
 	if err != nil {
 		// Never browse unsandboxed.
 		log.Printf("sandbox: %v", err)
@@ -151,6 +167,7 @@ func main() {
 
 	app := newApp(al, store)
 	app.sandbox = sandbox
+	app.export = export
 	for {
 		typ, contents, err := al.Receive()
 		if err != nil {
@@ -278,6 +295,7 @@ func (a *App) stateLocked() map[string]any {
 		"version":    version,
 		"sandbox":    a.sandbox,
 		"imageDir":   a.store.cachePath("img"),
+		"exportDir":  a.exportDir(),
 	}
 }
 
@@ -415,6 +433,16 @@ func (a *App) handle(typ int, contents string) {
 		a.mu.Unlock()
 	case reqClearData:
 		a.clearData()
+	case reqSavePDF:
+		var er ExportRequest
+		if err := json.Unmarshal([]byte(contents), &er); err != nil {
+			return
+		}
+		a.savePDF(er)
+	case reqExported:
+		if a.export != nil {
+			_ = a.export.clear()
+		}
 	case reqClosed:
 		a.mu.Lock()
 		if a.loadCancel != nil {
@@ -705,6 +733,32 @@ func (a *App) suggest(q string) {
 	}()
 }
 
+func (a *App) exportDir() string {
+	if a.export == nil {
+		return ""
+	}
+	return a.export.dir
+}
+
+// savePDF builds the PDF from the pages the frontend captured.
+func (a *App) savePDF(er ExportRequest) {
+	if a.export == nil {
+		a.sendError(errors.New("saving PDFs is not available"), false)
+		return
+	}
+	go func() {
+		a.busy(true, "Making the PDF …")
+		err := a.export.writePDF(er)
+		a.busy(false, "")
+		if err != nil {
+			log.Printf("pdf: %v", err)
+			a.send(resPDF, map[string]any{"error": "Could not make the PDF: " + err.Error()})
+			return
+		}
+		a.send(resPDF, map[string]any{"path": a.export.pdfPath(), "title": cleanTitle(er.Title)})
+	}()
+}
+
 // newSession forgets cookies and open connections; it runs when the app
 // is opened and closed, so sites can't recognise the tablet from one use
 // of the browser to the next (AppLoad keeps the backend running).
@@ -739,6 +793,9 @@ func (a *App) clearData() {
 	a.mu.Unlock()
 	if t, ok := old.Transport.(*http.Transport); ok {
 		t.CloseIdleConnections()
+	}
+	if a.export != nil {
+		_ = a.export.clear()
 	}
 	err := a.store.clearCache()
 	a.busy(false, "")
