@@ -91,6 +91,9 @@ func TestBuildPDF(t *testing.T) {
 	if !bytes.Contains(b, []byte("/URI (https://example.org/x)")) {
 		t.Error("web link missing")
 	}
+	if !bytes.Contains(b, []byte("/URI (https://example.com/a)")) {
+		t.Error("the title doesn't link to the page")
+	}
 	if !bytes.Contains(b, []byte("/Subtype /Image")) {
 		t.Error("picture missing")
 	}

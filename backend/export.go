@@ -247,7 +247,7 @@ func pageStream(p *Page) []item {
 	if err != nil {
 		return nil
 	}
-	s := &streamer{}
+	s := &streamer{titleLink: p.URL}
 	for _, n := range nodes {
 		s.walk(n, textStyle{scale: 1})
 	}
@@ -255,10 +255,11 @@ func pageStream(p *Page) []item {
 }
 
 type streamer struct {
-	items   []item
-	pre     int
-	lists   []int // counters of the open lists (-1: bullets)
-	pending *item // marker/heading waiting for the next visible character
+	titleLink string // the title links to the page on the web (not underlined, as on screen)
+	items     []item
+	pre       int
+	lists     []int // counters of the open lists (-1: bullets)
+	pending   *item // marker/heading waiting for the next visible character
 }
 
 var headingScale = map[int]float64{1: 2, 2: 1.5, 3: 1.2, 4: 1, 5: 0.8, 6: 1}
@@ -297,6 +298,10 @@ func (s *streamer) walk(n *html.Node, st textStyle) {
 	case "h1", "h2", "h3", "h4", "h5", "h6":
 		lvl := int(n.Data[1] - '0')
 		st.bold = true
+		if lvl == 1 && s.titleLink != "" && (strings.HasPrefix(s.titleLink, "https://") || strings.HasPrefix(s.titleLink, "http://")) {
+			st.link = s.titleLink
+		}
+		s.titleLink = "" // only the first heading: the page title
 		st.scale = headingScale[lvl]
 		block = true
 		s.brk()
