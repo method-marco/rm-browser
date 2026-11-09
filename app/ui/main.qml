@@ -88,18 +88,18 @@ Rectangle {
     // the app (SIL OFL, app/fonts). The backend embeds the same files for
     // Save as PDF (backend/fonts, pdfFonts in export.go): keep both in step.
     readonly property var fontChoices: [
-        { key: "sans", label: "Noto Sans", family: "Noto Sans" },
-        { key: "inter", label: "Inter", family: "Inter", file: "Inter" },
-        { key: "plexsans", label: "Plex Sans", family: "IBM Plex Sans", file: "IBMPlexSans" },
-        { key: "atkinson", label: "Atkinson", family: "Atkinson Hyperlegible", file: "AtkinsonHyperlegible" },
-        { key: "garamond", label: "Garamond", family: "EB Garamond" },
-        { key: "literata", label: "Literata", family: "Literata", file: "Literata" },
-        { key: "merriweather", label: "Merriweather", family: "Merriweather", file: "Merriweather" },
-        { key: "sourceserif", label: "Source Serif", family: "Source Serif 4", file: "SourceSerif4" },
-        { key: "lora", label: "Lora", family: "Lora", file: "Lora" },
-        { key: "crimson", label: "Crimson", family: "Crimson Pro", file: "CrimsonPro" },
-        { key: "bitter", label: "Bitter", family: "Bitter", file: "Bitter" },
-        { key: "plexmono", label: "Plex Mono", family: "IBM Plex Mono", file: "IBMPlexMono" }
+        { key: "sans", label: "Noto Sans", family: "Noto Sans", group: "sans" },
+        { key: "inter", label: "Inter", family: "Inter", file: "Inter", group: "sans" },
+        { key: "plexsans", label: "Plex Sans", family: "IBM Plex Sans", file: "IBMPlexSans", group: "sans" },
+        { key: "atkinson", label: "Atkinson", family: "Atkinson Hyperlegible", file: "AtkinsonHyperlegible", group: "sans" },
+        { key: "garamond", label: "Garamond", family: "EB Garamond", group: "serif" },
+        { key: "literata", label: "Literata", family: "Literata", file: "Literata", group: "serif" },
+        { key: "merriweather", label: "Merriweather", family: "Merriweather", file: "Merriweather", group: "serif" },
+        { key: "sourceserif", label: "Source Serif", family: "Source Serif 4", file: "SourceSerif4", group: "serif" },
+        { key: "lora", label: "Lora", family: "Lora", file: "Lora", group: "serif" },
+        { key: "crimson", label: "Crimson", family: "Crimson Pro", file: "CrimsonPro", group: "serif" },
+        { key: "bitter", label: "Bitter", family: "Bitter", file: "Bitter", group: "serif" },
+        { key: "plexmono", label: "Plex Mono", family: "IBM Plex Mono", file: "IBMPlexMono", group: "mono" }
     ]
     Instantiator {
         model: {
@@ -109,6 +109,14 @@ Rectangle {
             return files
         }
         delegate: FontLoader { source: modelData }
+    }
+    readonly property var fontGroups: [{ key: "sans", title: "Sans serif" }, { key: "serif", title: "Serif" },
+                                       { key: "mono", title: "Monospace" }]
+    property bool fontListOpen: false
+    onPanelChanged: fontListOpen = false
+    function currentFont() {
+        for (const f of fontChoices) if (f.key === (settings.font || "sans")) return f
+        return fontChoices[0]
     }
     readonly property int minFontSize: 16
     readonly property int maxFontSize: 96
@@ -1245,21 +1253,49 @@ Rectangle {
                 Text { text: "Font and layout"; font.pixelSize: 36; font.bold: true; Layout.fillWidth: true }
                 EButton { text: "×"; fontSize: 40; onClicked: closePanel() }
             }
-            Flow {
-                Layout.fillWidth: true
+            // the typeface: one button showing the current one, opening the
+            // list (each name in its own face) in place of the other rows
+            RowLayout {
                 spacing: 12
-                Repeater {
-                    model: fontChoices
-                    EButton {
-                        text: modelData.label
-                        fontFamily: modelData.family
-                        active: (settings.font || "sans") === modelData.key
-                        onClicked: setSetting({ font: modelData.key })
+                visible: !fontListOpen
+                Text { text: "Font"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
+                EButton {
+                    objectName: "fontDropdown"
+                    Layout.fillWidth: true
+                    text: currentFont().label + "  \u25BE"
+                    fontFamily: currentFont().family
+                    onClicked: fontListOpen = true
+                }
+            }
+            Repeater {
+                model: fontListOpen ? fontGroups : []
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    required property var modelData
+                    Text { text: modelData.title; font.pixelSize: 24; font.bold: true }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 2; columnSpacing: 12; rowSpacing: 12
+                        Repeater {
+                            model: fontChoices.filter(function (f) { return f.group === modelData.key })
+                            EButton {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                text: modelData.label
+                                fontFamily: modelData.family
+                                fontSize: 30
+                                active: (settings.font || "sans") === modelData.key
+                                onClicked: { setSetting({ font: modelData.key }); fontListOpen = false }
+                            }
+                        }
                     }
                 }
             }
             RowLayout {
                 spacing: 12
+                visible: !fontListOpen
                 Text { text: "Size"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
                 // root.fontSize: inside an EButton, fontSize is the button's own label size
                 EButton { text: "A\u2212"; fontSize: 24; enabled: root.fontSize > minFontSize; onClicked: setSetting({ fontSize: Math.max(minFontSize, root.fontSize - fontStep(false)) }) }
@@ -1268,6 +1304,7 @@ Rectangle {
             }
             RowLayout {
                 spacing: 12
+                visible: !fontListOpen
                 Text { text: "Spacing"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
                 Repeater {
                     model: [[100, "1.0"], [115, "1.15"], [125, "1.25"], [150, "1.5"], [175, "1.75"], [200, "2.0"]]
@@ -1276,12 +1313,14 @@ Rectangle {
             }
             RowLayout {
                 spacing: 12
+                visible: !fontListOpen
                 Text { text: "Alignment"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
                 EButton { text: "Left"; active: !justified; onClicked: setSetting({ align: "left" }) }
                 EButton { text: "Justified"; active: justified; onClicked: setSetting({ align: "justify" }) }
             }
             RowLayout {
                 spacing: 12
+                visible: !fontListOpen
                 Text { text: "Margins"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
                 EButton { text: "Narrow"; active: settings.margin === "narrow"; onClicked: setSetting({ margin: "narrow" }) }
                 EButton { text: "Normal"; active: !settings.margin || settings.margin === "normal"; onClicked: setSetting({ margin: "normal" }) }
@@ -1307,7 +1346,7 @@ Rectangle {
             }
             Text { text: "Text"; font.pixelSize: 30; font.bold: true }
             EButton {
-                text: "Aa  Font and layout: " + fontChoices.filter(function (f) { return f.key === (settings.font || "sans") })[0].label + ", " + fontSize + " px"
+                text: "Aa  Font and layout: " + currentFont().label + ", " + fontSize + " px"
                 onClicked: panel = "font"
             }
             Text { text: "Images"; font.pixelSize: 30; font.bold: true }

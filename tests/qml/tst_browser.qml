@@ -371,8 +371,14 @@ Item {
             app.toast = ""
             shot("font-panel")
             Bus.clear()
+            // the font list: closed until the dropdown is tapped, closes on a choice
+            verify(!findButton(app, "Literata"), "font list closed")
+            tapButton("Noto Sans  \u25BE")
+            verify(!findButton(app, "A+"), "the list replaces the other rows")
+            shot("font-list")
             tapButton("Literata")
             compare(Bus.lastOf(9).font, "literata")
+            verify(!findButton(app, "Literata") && findButton(app, "A+"), "list closed after the choice")
             tapButton("A+")
             compare(Bus.lastOf(9).fontSize, 34)
             tapButton("1.5")
