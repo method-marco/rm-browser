@@ -7,6 +7,10 @@ import net.asivery.XoviMessageBroker 2.0
 
 Item {
     id: win
+    // keys that leave the app would reach xochitl (AppLoad issue #41)
+    property int keysOut: 0
+    Keys.onPressed: keysOut++
+    Keys.onReleased: keysOut++
     width: 954; height: 1696   // reMarkable Paper Pro Move
 
     // stands for xochitl's screens under the app (AppLoad's list of apps):
@@ -395,6 +399,25 @@ Item {
             mouseClick(app, win.width / 2, 100)            // the page above closes the panel
             compare(app.panel, "")
             Bus.deliver(101, state())
+        }
+
+        function test_15_keys_never_reach_xochitl() {
+            Bus.deliver(101, state())
+            Bus.deliver(107, {})
+            mouseClick(app, win.width / 2, 170)              // the search field
+            compare(app.panel, "entry")
+            win.keysOut = 0
+            Bus.clear()
+            keyClick(Qt.Key_Backspace)                       // at the start of an empty field
+            keyClick(Qt.Key_Left)
+            keyClick(Qt.Key_R); keyClick(Qt.Key_O); keyClick(Qt.Key_A); keyClick(Qt.Key_D); keyClick(Qt.Key_Period); keyClick(Qt.Key_C); keyClick(Qt.Key_C)
+            keyClick(Qt.Key_Right); keyClick(Qt.Key_Down); keyClick(Qt.Key_Up)   // past the end
+            keyClick(Qt.Key_Return)
+            tryVerify(function () { return Bus.lastOf(2) !== null }, 2000, "the address was opened")
+            compare(Bus.lastOf(2).input, "road.cc")
+            keyClick(Qt.Key_Enter); keyClick(Qt.Key_Escape); keyClick(Qt.Key_Tab); keyClick(Qt.Key_PageDown)
+            compare(win.keysOut, 0, "keys went on to xochitl")
+            Bus.deliver(107, {})
         }
     }
 }

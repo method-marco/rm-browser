@@ -21,6 +21,12 @@ Rectangle {
         acceptedButtons: Qt.AllButtons
         onWheel: (w) => { w.accepted = true }
     }
+    // The same for keys (AppLoad issue #41): a key the focused item leaves
+    // alone goes on to xochitl. Text fields pass Enter on even after acting
+    // on it, so typing an address and pressing Enter also opened whatever
+    // was selected in the library behind the browser. Everything stops here.
+    Keys.onPressed: (e) => { e.accepted = true }
+    Keys.onReleased: (e) => { e.accepted = true }
 
     // Required by AppLoad.
     signal close
