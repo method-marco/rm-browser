@@ -55,10 +55,13 @@ const (
 	resPDF     = 109 // {path, title}: the PDF is ready to be imported
 )
 
+// the reader's text size in pixels (the Font panel's A− and A+)
+const minFontSize, maxFontSize = 16, 96
+
 type Settings struct {
 	FontSize    int    `json:"fontSize"`        // reader text size in pixels
 	Serif       bool   `json:"serif,omitempty"` // old setting, read once into Font
-	Font        string `json:"font"`            // sans | garamond | literata | atkinson
+	Font        string `json:"font"`            // a key of pdfFonts
 	LineSpacing int    `json:"lineSpacing"`     // percent of the font's line height
 	Align       string `json:"align"`           // left | justify
 	Margin      string `json:"margin"`          // narrow | normal | wide
@@ -273,7 +276,7 @@ func (a *App) loadConfig() {
 		_ = json.Unmarshal(b, &a.cfg)
 	}
 	s := &a.cfg.Settings
-	if s.FontSize < 20 || s.FontSize > 60 {
+	if s.FontSize < minFontSize || s.FontSize > maxFontSize {
 		s.FontSize = 32
 	}
 	if !validFont[s.Font] {
@@ -487,7 +490,7 @@ func (a *App) handle(typ int, contents string) {
 	case reqSettings:
 		a.mu.Lock()
 		s := &a.cfg.Settings
-		if req.FontSize != nil && *req.FontSize >= 20 && *req.FontSize <= 60 {
+		if req.FontSize != nil && *req.FontSize >= minFontSize && *req.FontSize <= maxFontSize {
 			s.FontSize = *req.FontSize
 		}
 		if req.Font != nil && validFont[*req.Font] {

@@ -31,9 +31,10 @@ An [AppLoad](https://github.com/asivery/rm-appload) app for reMarkable tablets: 
 - **Clear browsing data:** one button (home screen, menu, Settings) deletes history and searches,
   the back/forward list, cookies, and cached pages and images. Settings stay
 - **Font and layout** (menu → *Aa Font*, shown at the bottom so the page changes live above it):
-  typeface (Noto Sans and EB Garamond from the tablet, Literata and Atkinson Hyperlegible
-  bundled, SIL OFL), text size, line spacing (1.0 to 2.0), left or justified, narrow/normal/wide
-  margins. Saved PDFs use the same
+  12 typefaces (Noto Sans and EB Garamond from the tablet; Inter, IBM Plex Sans, Atkinson
+  Hyperlegible, Literata, Merriweather, Source Serif 4, Lora, Crimson Pro, Bitter and IBM Plex
+  Mono bundled, SIL OFL), text size 16 to 96 px, line spacing (1.0 to 2.0), left or justified,
+  narrow/normal/wide margins. Saved PDFs use the same
 - Settings: images on/off, colour or grey, safe search, insecure (`http://`) pages blocked or allowed
 - Images in colour (for the Paper Pro's colour screen) or grey scale (Settings), sized to fit
   the screen; e-ink-friendly UI (black/white,
@@ -184,7 +185,7 @@ backend/               Go backend -> backend/entry (static, no cgo)
   reader.go            Readability + bluemonday + Qt rich text writer
   images.go            image download, re-encoding, resizing, optional grey scale
   export.go            Save as PDF: the reader's layout -> text PDF (fpdf), export folder
-  fonts/               Noto Sans and EB Garamond for the PDF (SIL OFL, see OFL-*.txt)
+  fonts/               the reader's typefaces for the PDF (SIL OFL, see OFL-*.txt)
   main.go              messages, history, back/forward, clearing data
 tests/qml/             headless frontend tests (stub AppLoad module, Dockerfile)
 packaging/vellum/browser/VELBUILD

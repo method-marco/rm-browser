@@ -5,9 +5,41 @@
         <file>fonts/AtkinsonHyperlegible-BoldItalic.ttf</file>
         <file>fonts/AtkinsonHyperlegible-Italic.ttf</file>
         <file>fonts/AtkinsonHyperlegible-Regular.ttf</file>
+        <file>fonts/Bitter-Bold.ttf</file>
+        <file>fonts/Bitter-BoldItalic.ttf</file>
+        <file>fonts/Bitter-Italic.ttf</file>
+        <file>fonts/Bitter-Regular.ttf</file>
+        <file>fonts/CrimsonPro-Bold.ttf</file>
+        <file>fonts/CrimsonPro-BoldItalic.ttf</file>
+        <file>fonts/CrimsonPro-Italic.ttf</file>
+        <file>fonts/CrimsonPro-Regular.ttf</file>
+        <file>fonts/IBMPlexMono-Bold.ttf</file>
+        <file>fonts/IBMPlexMono-BoldItalic.ttf</file>
+        <file>fonts/IBMPlexMono-Italic.ttf</file>
+        <file>fonts/IBMPlexMono-Regular.ttf</file>
+        <file>fonts/IBMPlexSans-Bold.ttf</file>
+        <file>fonts/IBMPlexSans-BoldItalic.ttf</file>
+        <file>fonts/IBMPlexSans-Italic.ttf</file>
+        <file>fonts/IBMPlexSans-Regular.ttf</file>
+        <file>fonts/Inter-Bold.ttf</file>
+        <file>fonts/Inter-BoldItalic.ttf</file>
+        <file>fonts/Inter-Italic.ttf</file>
+        <file>fonts/Inter-Regular.ttf</file>
         <file>fonts/Literata-Bold.ttf</file>
         <file>fonts/Literata-BoldItalic.ttf</file>
         <file>fonts/Literata-Italic.ttf</file>
         <file>fonts/Literata-Regular.ttf</file>
+        <file>fonts/Lora-Bold.ttf</file>
+        <file>fonts/Lora-BoldItalic.ttf</file>
+        <file>fonts/Lora-Italic.ttf</file>
+        <file>fonts/Lora-Regular.ttf</file>
+        <file>fonts/Merriweather-Bold.ttf</file>
+        <file>fonts/Merriweather-BoldItalic.ttf</file>
+        <file>fonts/Merriweather-Italic.ttf</file>
+        <file>fonts/Merriweather-Regular.ttf</file>
+        <file>fonts/SourceSerif4-Bold.ttf</file>
+        <file>fonts/SourceSerif4-BoldItalic.ttf</file>
+        <file>fonts/SourceSerif4-Italic.ttf</file>
+        <file>fonts/SourceSerif4-Regular.ttf</file>
     </qresource>
 </RCC>

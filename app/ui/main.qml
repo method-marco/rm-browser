@@ -84,22 +84,36 @@ Rectangle {
     readonly property var settings: appState.settings || {}
 
     // ---- fonts and layout (the Font panel) ----
-    // Noto Sans and EB Garamond come with the tablet; Literata and Atkinson
-    // Hyperlegible come with the app (SIL OFL, app/fonts).
-    FontLoader { id: literata; source: "../fonts/Literata-Regular.ttf" }
-    FontLoader { source: "../fonts/Literata-Bold.ttf" }
-    FontLoader { source: "../fonts/Literata-Italic.ttf" }
-    FontLoader { source: "../fonts/Literata-BoldItalic.ttf" }
-    FontLoader { id: atkinson; source: "../fonts/AtkinsonHyperlegible-Regular.ttf" }
-    FontLoader { source: "../fonts/AtkinsonHyperlegible-Bold.ttf" }
-    FontLoader { source: "../fonts/AtkinsonHyperlegible-Italic.ttf" }
-    FontLoader { source: "../fonts/AtkinsonHyperlegible-BoldItalic.ttf" }
+    // Noto Sans and EB Garamond come with the tablet; the others come with
+    // the app (SIL OFL, app/fonts). The backend embeds the same files for
+    // Save as PDF (backend/fonts, pdfFonts in export.go): keep both in step.
     readonly property var fontChoices: [
         { key: "sans", label: "Noto Sans", family: "Noto Sans" },
+        { key: "inter", label: "Inter", family: "Inter", file: "Inter" },
+        { key: "plexsans", label: "Plex Sans", family: "IBM Plex Sans", file: "IBMPlexSans" },
+        { key: "atkinson", label: "Atkinson", family: "Atkinson Hyperlegible", file: "AtkinsonHyperlegible" },
         { key: "garamond", label: "Garamond", family: "EB Garamond" },
-        { key: "literata", label: "Literata", family: literata.name || "Literata" },
-        { key: "atkinson", label: "Atkinson", family: atkinson.name || "Atkinson Hyperlegible" }
+        { key: "literata", label: "Literata", family: "Literata", file: "Literata" },
+        { key: "merriweather", label: "Merriweather", family: "Merriweather", file: "Merriweather" },
+        { key: "sourceserif", label: "Source Serif", family: "Source Serif 4", file: "SourceSerif4" },
+        { key: "lora", label: "Lora", family: "Lora", file: "Lora" },
+        { key: "crimson", label: "Crimson", family: "Crimson Pro", file: "CrimsonPro" },
+        { key: "bitter", label: "Bitter", family: "Bitter", file: "Bitter" },
+        { key: "plexmono", label: "Plex Mono", family: "IBM Plex Mono", file: "IBMPlexMono" }
     ]
+    Instantiator {
+        model: {
+            let files = []
+            for (const f of fontChoices)
+                if (f.file) for (const s of ["Regular", "Bold", "Italic", "BoldItalic"]) files.push("../fonts/" + f.file + "-" + s + ".ttf")
+            return files
+        }
+        delegate: FontLoader { source: modelData }
+    }
+    readonly property int minFontSize: 16
+    readonly property int maxFontSize: 96
+    // finer steps for small text, bigger ones for large
+    function fontStep(up) { return (up ? root.fontSize >= 40 : root.fontSize > 40) ? 4 : 2 }
     function familyOf(key) {
         for (const f of fontChoices) if (f.key === key) return f.family
         return "Noto Sans"
@@ -1247,9 +1261,10 @@ Rectangle {
             RowLayout {
                 spacing: 12
                 Text { text: "Size"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
-                EButton { text: "A\u2212"; fontSize: 24; enabled: fontSize > 20; onClicked: setSetting({ fontSize: fontSize - 2 }) }
-                Text { text: fontSize + " px"; font.pixelSize: 26; Layout.preferredWidth: 100; horizontalAlignment: Text.AlignHCenter }
-                EButton { text: "A+"; fontSize: 32; enabled: fontSize < 60; onClicked: setSetting({ fontSize: fontSize + 2 }) }
+                // root.fontSize: inside an EButton, fontSize is the button's own label size
+                EButton { text: "A\u2212"; fontSize: 24; enabled: root.fontSize > minFontSize; onClicked: setSetting({ fontSize: Math.max(minFontSize, root.fontSize - fontStep(false)) }) }
+                Text { text: root.fontSize + " px"; font.pixelSize: 26; Layout.preferredWidth: 100; horizontalAlignment: Text.AlignHCenter }
+                EButton { text: "A+"; fontSize: 32; enabled: root.fontSize < maxFontSize; onClicked: setSetting({ fontSize: Math.min(maxFontSize, root.fontSize + fontStep(true)) }) }
             }
             RowLayout {
                 spacing: 12

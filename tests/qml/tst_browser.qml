@@ -396,6 +396,22 @@ Item {
             // Save as PDF carries the new font and justification
             const lay = app.exportLayout()
             compare(lay.font, "literata"); compare(lay.justify, true); compare(lay.areaWidth, win.width - 2 * 104)
+            // every typeface the panel offers is loaded, and sizes go up to 96 px
+            const families = Qt.fontFamilies()
+            for (const f of app.fontChoices)   // (Noto Sans and EB Garamond come with the tablet)
+                if (f.file) verify(families.indexOf(f.family) >= 0, "font loaded: " + f.family)
+            Bus.deliver(101, state({ settings: { fontSize: 32, font: "merriweather", lineSpacing: 125, align: "left", margin: "normal" } }))
+            shot("font-panel-merriweather")
+            Bus.deliver(101, state({ settings: { fontSize: 92, font: "sans", lineSpacing: 125, align: "left", margin: "normal" } }))
+            tapButton("A+")
+            compare(Bus.lastOf(9).fontSize, 96)
+            Bus.deliver(101, state({ settings: { fontSize: 96, font: "sans", lineSpacing: 125, align: "left", margin: "normal" } }))
+            verify(!findButton(app, "A+").enabled, "96 px is the largest")
+            tapButton("A\u2212")
+            compare(Bus.lastOf(9).fontSize, 92)
+            Bus.deliver(101, state({ settings: { fontSize: 40, font: "sans", lineSpacing: 125, align: "left", margin: "normal" } }))
+            tapButton("A\u2212")
+            compare(Bus.lastOf(9).fontSize, 38)
             mouseClick(app, win.width / 2, 100)            // the page above closes the panel
             compare(app.panel, "")
             Bus.deliver(101, state())

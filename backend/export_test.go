@@ -115,12 +115,22 @@ func TestBuildPDF(t *testing.T) {
 		t.Error("absurd font size accepted")
 	}
 	// every typeface embeds its own font files
-	for font, want := range map[string]string{"garamond": "utf8ebgaramond", "literata": "utf8literata", "atkinson": "utf8atkinsonhyperlegible", "": "utf8notosans"} {
-		req.FontSize, req.Font = 32, font
-		buf.Reset()
-		if err := buildPDF(&buf, testPage(), req, read); err != nil || !bytes.Contains(buf.Bytes(), []byte("/BaseFont /"+want)) {
-			t.Errorf("font %q: %v", font, err)
+	for font, pf := range pdfFonts {
+		for _, f := range pf.files {
+			if _, err := fontFS.ReadFile("fonts/" + f + ".ttf"); err != nil {
+				t.Errorf("font %q: %v", font, err)
+			}
 		}
+		req.FontSize, req.Font = 96, font
+		buf.Reset()
+		want := "/BaseFont /utf8" + strings.ToLower(pf.family)
+		if err := buildPDF(&buf, testPage(), req, read); err != nil || !bytes.Contains(buf.Bytes(), []byte(want)) {
+			t.Errorf("font %q: %v (no %s)", font, err, want)
+		}
+	}
+	req.FontSize, req.Font = 32, ""
+	if err := buildPDF(&buf, testPage(), req, read); err != nil || !bytes.Contains(buf.Bytes(), []byte("/BaseFont /utf8notosans")) {
+		t.Errorf("default font: %v", err)
 	}
 	req.Font = "comic"
 	if err := buildPDF(&buf, testPage(), req, read); err == nil {
@@ -217,4 +227,28 @@ func testPNG(t *testing.T, w, h int) []byte {
 		t.Fatal(err)
 	}
 	return b.Bytes()
+}
+
+// The reader and the PDF use the same typefaces: every bundled one is in
+// the app's resources (the frontend loads them from there) and here.
+func TestBundledFonts(t *testing.T) {
+	qrc, err := os.ReadFile("../app/application.qrc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, pf := range pdfFonts {
+		if key == "sans" || key == "garamond" { // on the tablet
+			continue
+		}
+		for _, f := range pf.files {
+			if !bytes.Contains(qrc, []byte("<file>fonts/"+f+".ttf</file>")) {
+				t.Errorf("%s.ttf is not in app/application.qrc", f)
+			}
+			a, err1 := os.ReadFile("../app/fonts/" + f + ".ttf")
+			b, err2 := fontFS.ReadFile("fonts/" + f + ".ttf")
+			if err1 != nil || err2 != nil || !bytes.Equal(a, b) {
+				t.Errorf("%s.ttf differs between app/fonts and backend/fonts", f)
+			}
+		}
+	}
 }

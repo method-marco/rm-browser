@@ -660,7 +660,12 @@ func TestFontSettings(t *testing.T) {
 	if s.Font != "literata" || s.LineSpacing != 150 || s.Align != "justify" || s.Margin != "wide" || s.FontSize != 30 {
 		t.Fatalf("not applied: %+v", s)
 	}
+	a.handle(reqSettings, `{"font":"merriweather","fontSize":96}`)
+	if s = a.cfg.Settings; s.Font != "merriweather" || s.FontSize != 96 {
+		t.Fatalf("new fonts, big sizes: %+v", s)
+	}
 	a.handle(reqSettings, `{"font":"comic","lineSpacing":900,"align":"center","margin":"huge","fontSize":5}`)
+	a.handle(reqSettings, `{"fontSize":100}`)
 	if a.cfg.Settings != s {
 		t.Fatalf("bad values accepted: %+v", a.cfg.Settings)
 	}

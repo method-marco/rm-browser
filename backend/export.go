@@ -8,7 +8,7 @@ package main
 // (x, y) and how tall it is, plus where each screen page begins. The
 // backend walks the same page HTML it gave the frontend, hands out the
 // characters line by line, and draws each line at Qt's position with the
-// same fonts (Noto Sans or EB Garamond, embedded) and size. Pictures are
+// same font (embedded, see pdfFonts) and size. Pictures are
 // the JPEGs the reader shows. Headings become the PDF's outline.
 //
 // The PDF is written under its document name ("Title (2).pdf": librarian
@@ -432,15 +432,28 @@ var pdfFonts = map[string]struct {
 	files  [4]string
 	m      fontMetrics
 }{
-	"sans":     {"NotoSans", [4]string{"NotoSans-Regular", "NotoSans-Bold", "NotoSans-Italic", "NotoSans-BoldItalic"}, fontMetrics{1.069, 0.293}},
-	"garamond": {"EBGaramond", [4]string{"EBGaramond-Regular", "EBGaramond-Bold", "EBGaramond-Italic", "EBGaramond-BoldItalic"}, fontMetrics{1.007, 0.298}},
-	"literata": {"Literata", [4]string{"Literata-Regular", "Literata-Bold", "Literata-Italic", "Literata-BoldItalic"}, fontMetrics{1.177, 0.308}},
-	"atkinson": {"AtkinsonHyperlegible", [4]string{"AtkinsonHyperlegible-Regular", "AtkinsonHyperlegible-Bold", "AtkinsonHyperlegible-Italic", "AtkinsonHyperlegible-BoldItalic"}, fontMetrics{0.950, 0.290}},
+	"sans":         {"NotoSans", [4]string{"NotoSans-Regular", "NotoSans-Bold", "NotoSans-Italic", "NotoSans-BoldItalic"}, fontMetrics{1.069, 0.293}},
+	"garamond":     {"EBGaramond", [4]string{"EBGaramond-Regular", "EBGaramond-Bold", "EBGaramond-Italic", "EBGaramond-BoldItalic"}, fontMetrics{1.007, 0.298}},
+	"literata":     {"Literata", [4]string{"Literata-Regular", "Literata-Bold", "Literata-Italic", "Literata-BoldItalic"}, fontMetrics{1.177, 0.308}},
+	"atkinson":     {"AtkinsonHyperlegible", [4]string{"AtkinsonHyperlegible-Regular", "AtkinsonHyperlegible-Bold", "AtkinsonHyperlegible-Italic", "AtkinsonHyperlegible-BoldItalic"}, fontMetrics{0.950, 0.290}},
+	"inter":        {"Inter", [4]string{"Inter-Regular", "Inter-Bold", "Inter-Italic", "Inter-BoldItalic"}, fontMetrics{0.969, 0.241}},
+	"plexsans":     {"IBMPlexSans", [4]string{"IBMPlexSans-Regular", "IBMPlexSans-Bold", "IBMPlexSans-Italic", "IBMPlexSans-BoldItalic"}, fontMetrics{1.025, 0.275}},
+	"merriweather": {"Merriweather", [4]string{"Merriweather-Regular", "Merriweather-Bold", "Merriweather-Italic", "Merriweather-BoldItalic"}, fontMetrics{0.984, 0.273}},
+	"sourceserif":  {"SourceSerif4", [4]string{"SourceSerif4-Regular", "SourceSerif4-Bold", "SourceSerif4-Italic", "SourceSerif4-BoldItalic"}, fontMetrics{1.036, 0.335}},
+	"lora":         {"Lora", [4]string{"Lora-Regular", "Lora-Bold", "Lora-Italic", "Lora-BoldItalic"}, fontMetrics{1.006, 0.274}},
+	"crimson":      {"CrimsonPro", [4]string{"CrimsonPro-Regular", "CrimsonPro-Bold", "CrimsonPro-Italic", "CrimsonPro-BoldItalic"}, fontMetrics{0.896, 0.215}},
+	"bitter":       {"Bitter", [4]string{"Bitter-Regular", "Bitter-Bold", "Bitter-Italic", "Bitter-BoldItalic"}, fontMetrics{0.935, 0.265}},
+	"plexmono":     {"IBMPlexMono", [4]string{"IBMPlexMono-Regular", "IBMPlexMono-Bold", "IBMPlexMono-Italic", "IBMPlexMono-BoldItalic"}, fontMetrics{1.025, 0.275}},
 }
 
-var validFont = map[string]bool{"sans": true, "garamond": true, "literata": true, "atkinson": true}
+var validFont = func() map[string]bool {
+	m := map[string]bool{}
+	for k := range pdfFonts {
+		m[k] = true
+	}
+	return m
+}()
 
-// pdfCompress: tests turn it off to read the drawing commands.
 var pdfCompress = true
 
 // ImageReader reads one of the reader's pictures (an absolute path from
