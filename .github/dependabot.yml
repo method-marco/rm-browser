@@ -1,5 +1,6 @@
-# Weekly pull requests for dependency updates; nothing merges by itself.
-# CI (release.yml) builds and runs the backend tests on each one.
+# Weekly pull requests for dependency updates. CI (release.yml) builds and
+# runs the backend tests on each one and merges it when they pass, except
+# major versions, which wait for a person.
 #
 # cooldown: a new release is only proposed once it has been out for a
 # while, so a hijacked or broken release is usually caught and pulled
