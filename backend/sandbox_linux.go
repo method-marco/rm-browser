@@ -78,6 +78,8 @@ var blockedSyscalls = []string{
 	"sethostname", "setdomainname",
 	// sockets other than socket(AF_INET/AF_INET6) (see below)
 	"socketpair",
+	// links: none in the export folder shared with root (see export.go)
+	"symlink", "symlinkat", "link", "linkat",
 }
 
 // jailFiles are copied into the jail's /etc so that DNS keeps working.
