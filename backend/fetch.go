@@ -44,10 +44,13 @@ func newHTTPClient() *http.Client {
 			ControlContext: checkDestination}).DialContext,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout:   15 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: responseHeaderTimeout,
 		IdleConnTimeout:       60 * time.Second,
 		MaxIdleConns:          16,
 		ForceAttemptHTTP2:     true,
+		// a connection that went dead (the tablet slept, Wi-Fi reconnected)
+		// is noticed within seconds instead of hanging a page load
+		HTTP2: &http.HTTP2Config{SendPingTimeout: 10 * time.Second, PingTimeout: 5 * time.Second},
 	}
 	return &http.Client{
 		Jar:       jar,
@@ -81,6 +84,40 @@ func httpsURL(u string) string {
 		return "https://" + u[7:]
 	}
 	return u
+}
+
+// responseHeaderTimeout: how long a site may take to start answering
+// (tests shorten it).
+var responseHeaderTimeout = 20 * time.Second
+
+// staleConnections tells whether kept-alive connections should be dropped
+// before the next request: after the tablet slept (it does for seconds
+// even while reading; Wi-Fi reconnects then, and old connections are dead
+// without anyone noticing) or after a long pause. The wall clock keeps
+// running during sleep, Go's monotonic clock doesn't.
+func staleConnections(last, now time.Time) bool {
+	if last.IsZero() {
+		return false
+	}
+	return staleGap(now.Sub(last), now.Round(0).Sub(last.Round(0)))
+}
+
+// staleGap: awake is the time between two requests on the monotonic clock
+// (without sleep), wall on the wall clock (with it).
+func staleGap(awake, wall time.Duration) bool {
+	return wall-awake > 2*time.Second || awake > 45*time.Second
+}
+
+// retryable: the request may have died on a dead connection; it's worth
+// one more try on a fresh one.
+func retryable(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, errLocalNetwork) || errors.Is(err, errInsecure) {
+		return false
+	}
+	var ne net.Error
+	return (errors.As(err, &ne) && ne.Timeout()) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, syscall.ETIMEDOUT) ||
+		errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) || strings.Contains(err.Error(), "connection reset")
 }
 
 // allowLocalForTests lets tests talk to their local web server.
@@ -167,6 +204,19 @@ func fetch(ctx context.Context, c *http.Client, req *http.Request, limit int64) 
 		return nil, errInsecure
 	}
 	resp, err := c.Do(req)
+	if err != nil && retryable(err) && ctx.Err() == nil && (req.Body == nil || req.GetBody != nil) {
+		// once more on a fresh connection
+		if t, ok := c.Transport.(*http.Transport); ok {
+			t.CloseIdleConnections()
+		}
+		r2 := req.Clone(ctx)
+		if req.GetBody != nil {
+			if r2.Body, err = req.GetBody(); err != nil {
+				return nil, friendlyError(err)
+			}
+		}
+		resp, err = c.Do(r2)
+	}
 	if err != nil {
 		return nil, friendlyError(err)
 	}

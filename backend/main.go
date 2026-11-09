@@ -116,8 +116,9 @@ type App struct {
 	searchQ     string
 	suggestStop context.CancelFunc
 
-	export *Export // nil: Save as PDF unavailable
-	shown  *Page   // the page the reader shows now (for Save as PDF)
+	export  *Export   // nil: Save as PDF unavailable
+	shown   *Page     // the page the reader shows now (for Save as PDF)
+	lastNet time.Time // last network use (monotonic and wall clock)
 
 	sendHook func(typ int, v any) // tests: receives messages instead of AppLoad
 }
@@ -246,9 +247,18 @@ func (a *App) sendError(err error, retry bool) {
 
 func (a *App) busy(on bool, text string) { a.send(resBusy, map[string]any{"busy": on, "text": text}) }
 
+// client is the HTTP client for the next request; after the tablet slept
+// or a long pause it starts with fresh connections (see staleConnections).
 func (a *App) client() *http.Client {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	now := time.Now()
+	if staleConnections(a.lastNet, now) {
+		if t, ok := a.http.Transport.(*http.Transport); ok {
+			t.CloseIdleConnections()
+		}
+	}
+	a.lastNet = now
 	return a.http
 }
 

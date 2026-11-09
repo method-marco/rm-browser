@@ -583,3 +583,60 @@ func TestTrackerImages(t *testing.T) {
 		t.Errorf("requested %v", asked)
 	}
 }
+
+func TestStaleConnections(t *testing.T) {
+	now := time.Now()
+	if staleConnections(time.Time{}, now) || staleConnections(now.Add(-5*time.Second), now) {
+		t.Error("a short pause must keep the connections")
+	}
+	if !staleConnections(now.Add(-time.Minute), now) {
+		t.Error("a minute's pause")
+	}
+	for _, c := range []struct {
+		awake, wall time.Duration
+		stale       bool
+	}{
+		{3 * time.Second, 3 * time.Second, false},
+		{3 * time.Second, 33 * time.Second, true}, // slept 30 s
+		{1 * time.Second, 4 * time.Second, true},  // a short autosleep
+		{50 * time.Second, 50 * time.Second, true},
+	} {
+		if staleGap(c.awake, c.wall) != c.stale {
+			t.Errorf("awake %v wall %v: stale %v", c.awake, c.wall, !c.stale)
+		}
+	}
+}
+
+// A site that never answers on the first connection: the page still loads,
+// on a fresh connection.
+func TestRetryOnDeadConnection(t *testing.T) {
+	allowLocalForTests = true
+	allowHTTP.Store(true)
+	defer func() { allowLocalForTests = false; allowHTTP.Store(false) }()
+	old := responseHeaderTimeout
+	responseHeaderTimeout = 300 * time.Millisecond
+	defer func() { responseHeaderTimeout = old }()
+	var calls int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			time.Sleep(2 * time.Second) // dead: nothing comes back in time
+			return
+		}
+		_, _ = w.Write([]byte("<p>hello</p>"))
+	}))
+	defer srv.Close()
+	req, _ := newRequest(context.Background(), http.MethodGet, srv.URL, nil)
+	t0 := time.Now()
+	f, err := fetch(context.Background(), newHTTPClient(), req, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(f.Body), "hello") || time.Since(t0) > 1500*time.Millisecond {
+		t.Errorf("got %q after %v", f.Body, time.Since(t0))
+	}
+}
