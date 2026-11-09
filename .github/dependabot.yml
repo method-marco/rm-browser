@@ -1,18 +1,31 @@
-# Weekly pull requests for dependency updates. CI (release.yml) builds and
-# runs the backend tests on each one; merge when green.
+# Weekly pull requests for dependency updates; nothing merges by itself.
+# CI (release.yml) builds and runs the backend tests on each one.
+#
+# cooldown: a new release is only proposed once it has been out for a
+# while, so a hijacked or broken release is usually caught and pulled
+# before it reaches us. Security fixes (Dependabot security updates) are
+# not held back by it.
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /backend
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
     groups:
       go:            # one PR for all Go modules
         patterns: ["*"]
+  # the workflow pins actions to commit SHAs (a tag can be moved to other
+  # code); Dependabot updates the SHA and the version comment together
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
     groups:
       actions:
         patterns: ["*"]
