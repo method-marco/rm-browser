@@ -640,3 +640,31 @@ func TestRetryOnDeadConnection(t *testing.T) {
 		t.Errorf("got %q after %v", f.Body, time.Since(t0))
 	}
 }
+
+// Font settings: checked, and the old serif switch becomes EB Garamond.
+func TestFontSettings(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openStore(filepath.Join(dir, "cfg"), filepath.Join(dir, "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.writeConfig([]byte(`{"settings":{"fontSize":44,"serif":true}}`))
+	a := newApp(nil, store)
+	a.sendHook = func(int, any) {}
+	s := a.cfg.Settings
+	if s.Font != "garamond" || s.FontSize != 44 || s.LineSpacing != 125 || s.Align != "left" || s.Margin != "normal" {
+		t.Fatalf("defaults/migration: %+v", s)
+	}
+	a.handle(reqSettings, `{"font":"literata","lineSpacing":150,"align":"justify","margin":"wide","fontSize":30}`)
+	s = a.cfg.Settings
+	if s.Font != "literata" || s.LineSpacing != 150 || s.Align != "justify" || s.Margin != "wide" || s.FontSize != 30 {
+		t.Fatalf("not applied: %+v", s)
+	}
+	a.handle(reqSettings, `{"font":"comic","lineSpacing":900,"align":"center","margin":"huge","fontSize":5}`)
+	if a.cfg.Settings != s {
+		t.Fatalf("bad values accepted: %+v", a.cfg.Settings)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "cfg", "config.json")); strings.Contains(string(b), `"serif"`) {
+		t.Errorf("old setting kept: %s", b)
+	}
+}

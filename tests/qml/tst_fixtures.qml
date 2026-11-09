@@ -24,10 +24,16 @@ Item {
             x.send()
             return x.responseText
         }
+        // synchronous file PUTs sometimes come out empty: read back, retry
         function write(url, text) {
-            const x = new XMLHttpRequest()
-            x.open("PUT", url, false)
-            x.send(text)
+            for (let i = 0; i < 5; i++) {
+                const x = new XMLHttpRequest()
+                x.open("PUT", url, false)
+                x.send(text)
+                wait(50)
+                if (read(url).length === text.length) return
+            }
+            fail("could not write " + url)
         }
         function shot(name) {
             let done = false
@@ -38,7 +44,7 @@ Item {
         function test_pages() {
             const list = read(dir + "index.txt").split("\n").filter(function (l) { return l.trim() !== "" })
             if (list.length === 0) skip("no fixtures")
-            Bus.deliver(101, { settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
+            Bus.deliver(101, { settings: { fontSize: 32, font: "sans", safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
             const te = findChild(app, "te")
             for (let n = 0; n < list.length; n++) {
                 const page = JSON.parse(read(dir + list[n]))
@@ -68,12 +74,21 @@ Item {
                 compare(sum, Array.from(te.getText(0, te.length).replace(/\s/g, "")).length, list[n] + ": every character on a line")
                 write(dir + list[n] + ".sans32.layout", JSON.stringify(lay))
                 write(dir + list[n] + ".qttext", te.getText(0, te.length))
-                Bus.deliver(101, { settings: { fontSize: 44, serif: true, safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
+                Bus.deliver(101, { settings: { fontSize: 44, font: "garamond", safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
                 tryVerify(function () { return te.font.family === "EB Garamond" && te.font.pixelSize === 44 }, 3000)
                 wait(600)   // reflow and paginate
                 tryVerify(function () { return app.pageCount > 1 }, 5000)
                 write(dir + list[n] + ".serif44.layout", JSON.stringify(app.exportLayout()))
-                Bus.deliver(101, { settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
+                Bus.deliver(101, { settings: { fontSize: 36, font: "literata", lineSpacing: 150, align: "justify", margin: "wide", safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
+                tryVerify(function () { return te.font.pixelSize === 36 && te.text.indexOf('align="justify"') > 0 }, 3000)
+                wait(600)
+                tryVerify(function () { return app.pageCount > 1 }, 5000)
+                write(dir + list[n] + ".literata36j.layout", JSON.stringify(app.exportLayout()))
+                if (n === 3) {
+                    app.goToPage(1); wait(300)
+                    shot("real-" + n + "-literata36j-p2")
+                }
+                Bus.deliver(101, { settings: { fontSize: 32, font: "sans", safeSearch: "moderate", noImages: false }, history: [], imageDir: "/repo/build/fixture/cache/img" })
                 wait(400)
             }
         }

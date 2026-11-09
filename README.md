@@ -30,8 +30,11 @@ An [AppLoad](https://github.com/asivery/rm-appload) app for reMarkable tablets: 
 - **One tab.** *Back*, *Forward* and *Home* in the menu
 - **Clear browsing data:** one button (home screen, menu, Settings) deletes history and searches,
   the back/forward list, cookies, and cached pages and images. Settings stay
-- Settings: text size, font (Noto Sans or EB Garamond, the tablet's own fonts), images on/off,
-  colour or grey, safe search, insecure (`http://`) pages blocked or allowed
+- **Font and layout** (menu → *Aa Font*, shown at the bottom so the page changes live above it):
+  typeface (Noto Sans and EB Garamond from the tablet, Literata and Atkinson Hyperlegible
+  bundled, SIL OFL), text size, line spacing (1.0 to 2.0), left or justified, narrow/normal/wide
+  margins. Saved PDFs use the same
+- Settings: images on/off, colour or grey, safe search, insecure (`http://`) pages blocked or allowed
 - Images in colour (for the Paper Pro's colour screen) or grey scale (Settings), sized to fit
   the screen; e-ink-friendly UI (black/white,
   no animations, large touch targets); always full screen

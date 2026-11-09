@@ -72,12 +72,62 @@ Rectangle {
     readonly property int reqSavePDF: 15
     readonly property int reqExported: 16
 
-    property var appState: ({ settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false, greyImages: false, allowHTTP: false },
+    property var appState: ({ settings: { fontSize: 32, font: "sans", lineSpacing: 125, align: "left", margin: "normal",
+                                          safeSearch: "moderate", noImages: false, greyImages: false, allowHTTP: false },
                               history: [], canBack: false, canForward: false, sandbox: "", version: "" })
     readonly property var settings: appState.settings || {}
+
+    // ---- fonts and layout (the Font panel) ----
+    // Noto Sans and EB Garamond come with the tablet; Literata and Atkinson
+    // Hyperlegible come with the app (SIL OFL, app/fonts).
+    FontLoader { id: literata; source: "../fonts/Literata-Regular.ttf" }
+    FontLoader { source: "../fonts/Literata-Bold.ttf" }
+    FontLoader { source: "../fonts/Literata-Italic.ttf" }
+    FontLoader { source: "../fonts/Literata-BoldItalic.ttf" }
+    FontLoader { id: atkinson; source: "../fonts/AtkinsonHyperlegible-Regular.ttf" }
+    FontLoader { source: "../fonts/AtkinsonHyperlegible-Bold.ttf" }
+    FontLoader { source: "../fonts/AtkinsonHyperlegible-Italic.ttf" }
+    FontLoader { source: "../fonts/AtkinsonHyperlegible-BoldItalic.ttf" }
+    readonly property var fontChoices: [
+        { key: "sans", label: "Noto Sans", family: "Noto Sans" },
+        { key: "garamond", label: "Garamond", family: "EB Garamond" },
+        { key: "literata", label: "Literata", family: literata.name || "Literata" },
+        { key: "atkinson", label: "Atkinson", family: atkinson.name || "Atkinson Hyperlegible" }
+    ]
+    function familyOf(key) {
+        for (const f of fontChoices) if (f.key === key) return f.family
+        return "Noto Sans"
+    }
+    readonly property int fontSize: settings.fontSize || 32
+    readonly property int lineSpacing: settings.lineSpacing || 125
+    readonly property bool justified: settings.align === "justify"
+    readonly property int sideMargin: settings.margin === "narrow" ? 24 : settings.margin === "wide" ? 104 : 56
+    // line spacing and alignment live in the page's rich text: rewrite the
+    // paragraphs the backend wrote (style="line-height:125%")
+    function restyle(h) {
+        let out = String(h).replace(/line-height:125%/g, "line-height:" + lineSpacing + "%")
+        if (justified) out = out.replace(/<(p|li) style="line-height/g, '<$1 align="justify" style="line-height')
+        return out
+    }
+    property string layoutKey: lineSpacing + "|" + justified
+    onLayoutKeyChanged: if (view === "page" && pageData) rerender()
+    // the same page again with the new layout, keeping the reading position
+    function rerender() {
+        recordTop()
+        const keep = topCharPos
+        pageHtml = ""
+        nextHtml = pageHeader(pageData) + restyle(safeHtml(pageData.html))
+        setTextTimer.restart()
+        topCharPos = keep
+        schedulePaginate()
+    }
+    function setSetting(obj) {
+        recordTop()
+        send(reqSettings, obj)
+    }
     property string view: "home"        // home | page | search | error
     property bool menuOpen: false
-    property string panel: ""           // "" | entry | contents | settings | confirm
+    property string panel: ""           // "" | entry | contents | settings | font | confirm
     property string busyText: ""
     property string errorText: ""
     property bool errorRetry: false
@@ -334,7 +384,8 @@ Rectangle {
             }
             p = e
         }
-        return { name: exportName, url: pageData.url || "", fontSize: settings.fontSize || 32, serif: !!settings.serif,
+        return { name: exportName, url: pageData.url || "", fontSize: fontSize, font: settings.font || "sans",
+                 justify: justified, areaWidth: Math.round(readerArea.width),
                  width: Math.round(root.width), height: Math.round(root.height),
                  x: Math.round(readerArea.x), y: Math.round(readerArea.y),
                  lines: lines, pageStarts: pageStarts, pageHeights: pageHeights }
@@ -415,14 +466,14 @@ Rectangle {
             .replace(/<(link|style|script|iframe|object|embed)\b[^>]*>/gi, "")
     }
     function showPage(p, position) {
+        // the same page again at the page the reader is on (new margins or
+        // images): stay exactly where the reader is
+        const same = view === "page" && pageData && pageData.url === p.url && pageHtml !== "" && position === pageIndex
+        let keep = -1
+        if (same) { recordTop(); keep = topCharPos }
         pageData = p
-        let meta = []
-        if (p.site) meta.push(esc(p.site))
-        if (p.byline) meta.push(esc(p.byline))
-        if (!p.secure) meta.push("<b>not secure (http)</b>")
-        if (!p.reader) meta.push("simplified page")
-        pendingPosition = position
-        topCharPos = -1
+        pendingPosition = same ? -1 : position
+        topCharPos = keep
         pageIndex = 0
         pageStarts = [0]
         pageHeights = [readerArea.height]
@@ -432,7 +483,7 @@ Rectangle {
         // linger). Clearing it first and setting the new text a moment
         // later is reliable.
         pageHtml = ""
-        nextHtml = "<h1>" + esc(p.title) + "</h1><p><small>" + meta.join(" · ") + "</small></p>" + safeHtml(p.html)
+        nextHtml = pageHeader(p) + restyle(safeHtml(p.html))
         setTextTimer.restart()
         view = "page"
         menuOpen = false
@@ -440,6 +491,16 @@ Rectangle {
         schedulePaginate()
     }
 
+    // title and meta line above the article (the backend's PDF builds the
+    // same, see pageStream in export.go)
+    function pageHeader(p) {
+        let meta = []
+        if (p.site) meta.push(esc(p.site))
+        if (p.byline) meta.push(esc(p.byline))
+        if (!p.secure) meta.push("<b>not secure (http)</b>")
+        if (!p.reader) meta.push("simplified page")
+        return "<h1>" + esc(p.title) + "</h1><p><small>" + meta.join(" · ") + "</small></p>"
+    }
     property string nextHtml: ""
     Timer {
         id: setTextTimer
@@ -525,10 +586,6 @@ Rectangle {
         }
         return ""
     }
-    function setFont(size, serif) {
-        recordTop()
-        send(reqSettings, { fontSize: size, serif: serif })
-    }
 
     // ------------------------------------------------------------ address bar
     Timer {
@@ -567,13 +624,14 @@ Rectangle {
         property alias text: lbl.text
         property bool active: false
         property int fontSize: 28
+        property string fontFamily: ""
         signal clicked
         implicitWidth: Math.max(100, lbl.implicitWidth + 36)
         implicitHeight: 68
         color: active ? "black" : "white"
         border.color: "black"; border.width: 3; radius: 8
         opacity: enabled ? 1 : 0.3
-        Text { id: lbl; anchors.centerIn: parent; font.pixelSize: btn.fontSize; color: btn.active ? "white" : "black" }
+        Text { id: lbl; anchors.centerIn: parent; font.pixelSize: btn.fontSize; font.family: btn.fontFamily || "Noto Sans"; color: btn.active ? "white" : "black" }
         MouseArea { anchors.fill: parent; onClicked: btn.clicked() }
     }
 
@@ -688,7 +746,7 @@ Rectangle {
         id: readerArea
         objectName: "readerArea"
         anchors.fill: parent
-        anchors.leftMargin: 56; anchors.rightMargin: 56
+        anchors.leftMargin: sideMargin; anchors.rightMargin: sideMargin
         anchors.topMargin: 48; anchors.bottomMargin: 76
         visible: view === "page"
         onHeightChanged: { schedulePaginate(); viewportTimer.restart() }
@@ -717,8 +775,8 @@ Rectangle {
                 textFormat: TextEdit.RichText
                 wrapMode: TextEdit.Wrap
                 color: "black"
-                font.pixelSize: settings.fontSize || 32
-                font.family: settings.serif ? "EB Garamond" : "Noto Sans"
+                font.pixelSize: fontSize
+                font.family: familyOf(settings.font)
                 text: pageHtml
                 onContentHeightChanged: schedulePaginate()
                 onWidthChanged: schedulePaginate()
@@ -863,7 +921,7 @@ Rectangle {
                         font.pixelSize: 29; font.bold: true
                         wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                     }
-                    Text { width: parent.width; text: modelData.host; font.pixelSize: 22; color: "#444"; elide: Text.ElideRight }
+                    Text { width: parent.width; text: modelData.host || ""; font.pixelSize: 22; color: "#444"; elide: Text.ElideRight }
                     Text {
                         width: parent.width
                         text: modelData.snippet
@@ -934,9 +992,7 @@ Rectangle {
                     visible: view === "page"
                     onClicked: { contentsTab = (pageData && pageData.headings.length === 0 && pageData.links.length > 0) ? "links" : "headings"; panel = "contents"; menuOpen = false }
                 }
-                EButton { text: "A-"; visible: view === "page"; enabled: (settings.fontSize || 32) > 22; onClicked: setFont((settings.fontSize || 32) - 4, !!settings.serif) }
-                EButton { text: "A+"; visible: view === "page"; enabled: (settings.fontSize || 32) < 56; onClicked: setFont((settings.fontSize || 32) + 4, !!settings.serif) }
-                EButton { text: settings.serif ? "Sans" : "Serif"; visible: view === "page"; onClicked: setFont(settings.fontSize || 32, !settings.serif) }
+                EButton { text: "Aa  Font"; visible: view === "page"; onClicked: { menuOpen = false; panel = "font" } }
                 EButton { text: "Save as PDF"; visible: view === "page" && !!appState.exportDir; onClicked: { menuOpen = false; startExport() } }
                 EButton { text: "Reload"; visible: view !== "home"; onClicked: { menuOpen = false; send(reqReload) } }
                 EButton { text: "Settings"; onClicked: { panel = "settings"; menuOpen = false } }
@@ -1142,6 +1198,77 @@ Rectangle {
         }
     }
 
+    // ------------------------------------------------------------ font panel
+    // At the bottom, so the page above shows each change right away.
+    MouseArea {   // tap on the page above closes it
+        visible: panel === "font"
+        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+        anchors.bottom: fontPanel.top
+        onClicked: closePanel()
+    }
+    Rectangle {
+        id: fontPanel
+        objectName: "fontPanel"
+        visible: panel === "font"
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        height: fontCol.implicitHeight + 56
+        color: "white"
+        Rectangle { anchors.top: parent.top; width: parent.width; height: 3; color: "black" }
+        MouseArea { anchors.fill: parent }
+        ColumnLayout {
+            id: fontCol
+            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+            anchors.margins: 28
+            spacing: 14
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: "Font and layout"; font.pixelSize: 36; font.bold: true; Layout.fillWidth: true }
+                EButton { text: "×"; fontSize: 40; onClicked: closePanel() }
+            }
+            Flow {
+                Layout.fillWidth: true
+                spacing: 12
+                Repeater {
+                    model: fontChoices
+                    EButton {
+                        text: modelData.label
+                        fontFamily: modelData.family
+                        active: (settings.font || "sans") === modelData.key
+                        onClicked: setSetting({ font: modelData.key })
+                    }
+                }
+            }
+            RowLayout {
+                spacing: 12
+                Text { text: "Size"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
+                EButton { text: "A\u2212"; fontSize: 24; enabled: fontSize > 20; onClicked: setSetting({ fontSize: fontSize - 2 }) }
+                Text { text: fontSize + " px"; font.pixelSize: 26; Layout.preferredWidth: 100; horizontalAlignment: Text.AlignHCenter }
+                EButton { text: "A+"; fontSize: 32; enabled: fontSize < 60; onClicked: setSetting({ fontSize: fontSize + 2 }) }
+            }
+            RowLayout {
+                spacing: 12
+                Text { text: "Spacing"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
+                Repeater {
+                    model: [[100, "1.0"], [115, "1.15"], [125, "1.25"], [150, "1.5"], [175, "1.75"], [200, "2.0"]]
+                    EButton { text: modelData[1]; fontSize: 24; implicitWidth: 92; active: lineSpacing === modelData[0]; onClicked: setSetting({ lineSpacing: modelData[0] }) }
+                }
+            }
+            RowLayout {
+                spacing: 12
+                Text { text: "Alignment"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
+                EButton { text: "Left"; active: !justified; onClicked: setSetting({ align: "left" }) }
+                EButton { text: "Justified"; active: justified; onClicked: setSetting({ align: "justify" }) }
+            }
+            RowLayout {
+                spacing: 12
+                Text { text: "Margins"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
+                EButton { text: "Narrow"; active: settings.margin === "narrow"; onClicked: setSetting({ margin: "narrow" }) }
+                EButton { text: "Normal"; active: !settings.margin || settings.margin === "normal"; onClicked: setSetting({ margin: "normal" }) }
+                EButton { text: "Wide"; active: settings.margin === "wide"; onClicked: setSetting({ margin: "wide" }) }
+            }
+        }
+    }
+
     // ------------------------------------------------------------ settings panel
     Rectangle {
         visible: panel === "settings"
@@ -1157,18 +1284,10 @@ Rectangle {
                 Text { text: "Settings"; font.pixelSize: 42; font.bold: true; Layout.fillWidth: true }
                 EButton { text: "×"; fontSize: 40; onClicked: closePanel() }
             }
-            Text { text: "Text size"; font.pixelSize: 30; font.bold: true }
-            RowLayout {
-                spacing: 16
-                EButton { text: "A-"; enabled: (settings.fontSize || 32) > 22; onClicked: setFont((settings.fontSize || 32) - 4, !!settings.serif) }
-                Text { text: (settings.fontSize || 32) + " px"; font.pixelSize: 28; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignHCenter }
-                EButton { text: "A+"; enabled: (settings.fontSize || 32) < 56; onClicked: setFont((settings.fontSize || 32) + 4, !!settings.serif) }
-            }
-            Text { text: "Font"; font.pixelSize: 30; font.bold: true }
-            RowLayout {
-                spacing: 16
-                EButton { text: "Sans (Noto)"; active: !settings.serif; onClicked: setFont(settings.fontSize || 32, false) }
-                EButton { text: "Serif (Garamond)"; active: !!settings.serif; onClicked: setFont(settings.fontSize || 32, true) }
+            Text { text: "Text"; font.pixelSize: 30; font.bold: true }
+            EButton {
+                text: "Aa  Font and layout: " + fontChoices.filter(function (f) { return f.key === (settings.font || "sans") })[0].label + ", " + fontSize + " px"
+                onClicked: panel = "font"
             }
             Text { text: "Images"; font.pixelSize: 30; font.bold: true }
             RowLayout {

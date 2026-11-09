@@ -1,5 +1,13 @@
 <RCC>
     <qresource>
         <file>ui/main.qml</file>
+        <file>fonts/AtkinsonHyperlegible-Bold.ttf</file>
+        <file>fonts/AtkinsonHyperlegible-BoldItalic.ttf</file>
+        <file>fonts/AtkinsonHyperlegible-Italic.ttf</file>
+        <file>fonts/AtkinsonHyperlegible-Regular.ttf</file>
+        <file>fonts/Literata-Bold.ttf</file>
+        <file>fonts/Literata-BoldItalic.ttf</file>
+        <file>fonts/Literata-Italic.ttf</file>
+        <file>fonts/Literata-Regular.ttf</file>
     </qresource>
 </RCC>

@@ -32,7 +32,7 @@ const (
 	reqForward    = 6  // history forward
 	reqPosition   = 7  // {page}: reading position of the current entry
 	reqClearData  = 8  // delete history, cookies, cache
-	reqSettings   = 9  // {fontSize, serif, safeSearch, noImages, greyImages}
+	reqSettings   = 9  // {fontSize, font, lineSpacing, align, margin, safeSearch, noImages, greyImages, allowHTTP}
 	reqHome       = 10 // go to the start screen
 	reqReload     = 11 // load the current entry again, bypassing the cache
 	reqCancel     = 12 // stop loading
@@ -56,12 +56,16 @@ const (
 )
 
 type Settings struct {
-	FontSize   int    `json:"fontSize"` // reader text size in pixels
-	Serif      bool   `json:"serif"`
-	SafeSearch string `json:"safeSearch"` // moderate | strict | off
-	NoImages   bool   `json:"noImages"`
-	GreyImages bool   `json:"greyImages"` // default: colour
-	AllowHTTP  bool   `json:"allowHTTP"`  // default: HTTPS only
+	FontSize    int    `json:"fontSize"`        // reader text size in pixels
+	Serif       bool   `json:"serif,omitempty"` // old setting, read once into Font
+	Font        string `json:"font"`            // sans | garamond | literata | atkinson
+	LineSpacing int    `json:"lineSpacing"`     // percent of the font's line height
+	Align       string `json:"align"`           // left | justify
+	Margin      string `json:"margin"`          // narrow | normal | wide
+	SafeSearch  string `json:"safeSearch"`      // moderate | strict | off
+	NoImages    bool   `json:"noImages"`
+	GreyImages  bool   `json:"greyImages"` // default: colour
+	AllowHTTP   bool   `json:"allowHTTP"`  // default: HTTPS only
 }
 
 // Entry is one step in the tab's history.
@@ -272,6 +276,22 @@ func (a *App) loadConfig() {
 	if s.FontSize < 20 || s.FontSize > 60 {
 		s.FontSize = 32
 	}
+	if !validFont[s.Font] {
+		s.Font = "sans"
+		if s.Serif {
+			s.Font = "garamond"
+		}
+	}
+	s.Serif = false
+	if s.LineSpacing < 100 || s.LineSpacing > 200 {
+		s.LineSpacing = 125
+	}
+	if s.Align != "justify" {
+		s.Align = "left"
+	}
+	if s.Margin != "narrow" && s.Margin != "wide" {
+		s.Margin = "normal"
+	}
 	if s.SafeSearch == "" {
 		s.SafeSearch = "moderate"
 	}
@@ -368,17 +388,20 @@ func (a *App) addHistory(it HistoryItem) {
 
 func (a *App) handle(typ int, contents string) {
 	var req struct {
-		Input      string  `json:"input"`
-		Q          string  `json:"q"`
-		Page       int     `json:"page"`
-		Width      int     `json:"width"`
-		Height     int     `json:"height"`
-		FontSize   *int    `json:"fontSize"`
-		Serif      *bool   `json:"serif"`
-		SafeSearch *string `json:"safeSearch"`
-		NoImages   *bool   `json:"noImages"`
-		GreyImages *bool   `json:"greyImages"`
-		AllowHTTP  *bool   `json:"allowHTTP"`
+		Input       string  `json:"input"`
+		Q           string  `json:"q"`
+		Page        int     `json:"page"`
+		Width       int     `json:"width"`
+		Height      int     `json:"height"`
+		FontSize    *int    `json:"fontSize"`
+		Font        *string `json:"font"`
+		LineSpacing *int    `json:"lineSpacing"`
+		Align       *string `json:"align"`
+		Margin      *string `json:"margin"`
+		SafeSearch  *string `json:"safeSearch"`
+		NoImages    *bool   `json:"noImages"`
+		GreyImages  *bool   `json:"greyImages"`
+		AllowHTTP   *bool   `json:"allowHTTP"`
 	}
 	if contents != "" {
 		if err := json.Unmarshal([]byte(contents), &req); err != nil {
@@ -467,8 +490,17 @@ func (a *App) handle(typ int, contents string) {
 		if req.FontSize != nil && *req.FontSize >= 20 && *req.FontSize <= 60 {
 			s.FontSize = *req.FontSize
 		}
-		if req.Serif != nil {
-			s.Serif = *req.Serif
+		if req.Font != nil && validFont[*req.Font] {
+			s.Font = *req.Font
+		}
+		if req.LineSpacing != nil && *req.LineSpacing >= 100 && *req.LineSpacing <= 200 {
+			s.LineSpacing = *req.LineSpacing
+		}
+		if req.Align != nil && (*req.Align == "left" || *req.Align == "justify") {
+			s.Align = *req.Align
+		}
+		if req.Margin != nil && (*req.Margin == "narrow" || *req.Margin == "normal" || *req.Margin == "wide") {
+			s.Margin = *req.Margin
 		}
 		if req.SafeSearch != nil {
 			switch *req.SafeSearch {

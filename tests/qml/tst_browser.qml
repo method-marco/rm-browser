@@ -42,7 +42,7 @@ Item {
                      secure: true, reader: true }
         }
         function state(extra) {
-            return Object.assign({ settings: { fontSize: 32, serif: false, safeSearch: "moderate", noImages: false },
+            return Object.assign({ settings: { fontSize: 32, font: "sans", safeSearch: "moderate", noImages: false },
                                    history: [{ url: "https://example.com/old", title: "An old page", time: 1 }, { query: "e-ink tablets", time: 2 }],
                                    canBack: true, canForward: false, imageDir: "/repo/app", sandbox: "unprivileged user, Landlock v3, seccomp", version: "test" }, extra || {})
         }
@@ -173,7 +173,7 @@ Item {
             app.goToPage(4)
             const before = app.topCharPos
             const pagesBefore = app.pageCount
-            Bus.deliver(101, state({ settings: { fontSize: 44, serif: true, safeSearch: "moderate", noImages: false } }))
+            Bus.deliver(101, state({ settings: { fontSize: 44, font: "garamond", safeSearch: "moderate", noImages: false } }))
             tryVerify(function () { return app.pageCount > pagesBefore }, 3000, "more pages with larger text")
             const y = te.positionToRectangle(before).y
             verify(y >= app.pageStarts[app.pageIndex] - 1 && y < app.pageStarts[app.pageIndex] + app.pageHeights[app.pageIndex],
@@ -344,7 +344,7 @@ Item {
             Bus.deliver(101, state())
             Bus.deliver(107, {})                              // home
             tapEmptySpots("home")
-            Bus.deliver(104, { q: "e-ink", results: [{ title: "One", url: "https://a.example/", snippet: "x" }], more: false, page: 0 })
+            Bus.deliver(104, { query: "e-ink", results: [{ title: "One", url: "https://a.example/", snippet: "x" }], hasMore: false, page: 0 })
             tapEmptySpots("search results")
             Bus.deliver(102, { message: "cannot find example.invalid", retry: true })
             tapEmptySpots("error")
@@ -354,6 +354,47 @@ Item {
             showArticle(0, 30)
             tapEmptySpots("reader")
             Bus.deliver(107, {})
+        }
+
+        function test_14_font_panel() {
+            Bus.deliver(101, state())
+            showArticle(3, 40)
+            const te = findChild(app, "te")
+            app.menuOpen = true; wait(50)
+            verify(!findButton(app, "A+"), "size buttons are no longer in the main menu")
+            tapButton("Aa  Font")
+            compare(app.panel, "font")
+            app.toast = ""
+            shot("font-panel")
+            Bus.clear()
+            tapButton("Literata")
+            compare(Bus.lastOf(9).font, "literata")
+            tapButton("A+")
+            compare(Bus.lastOf(9).fontSize, 34)
+            tapButton("1.5")
+            compare(Bus.lastOf(9).lineSpacing, 150)
+            tapButton("Justified")
+            compare(Bus.lastOf(9).align, "justify")
+            tapButton("Wide")
+            compare(Bus.lastOf(9).margin, "wide")
+            // the backend confirms: the reader follows, at the same place
+            const before = te.getText(te.positionAt(4, app.pageStarts[app.pageIndex] + 2), te.positionAt(4, app.pageStarts[app.pageIndex] + 2) + 30)
+            Bus.deliver(101, state({ settings: { fontSize: 34, font: "literata", lineSpacing: 150, align: "justify", margin: "wide",
+                                                 safeSearch: "moderate", noImages: false } }))
+            tryVerify(function () { return te.font.family === app.familyOf("literata") && te.font.pixelSize === 34 }, 2000)
+            tryVerify(function () { return te.text.indexOf("line-height:150%") > 0 && te.text.indexOf('align="justify"') > 0 }, 3000, "spacing and alignment in the page")
+            compare(findChild(app, "readerArea").x, 104)
+            tryVerify(function () { return app.pageCount > 1 }, 3000)
+            wait(300)
+            const after = te.getText(te.positionAt(4, app.pageStarts[app.pageIndex] + 2), te.positionAt(4, app.pageStarts[app.pageIndex] + 2) + 200)
+            verify(after.indexOf(before.substring(0, 12)) >= 0, "kept the reading position: " + before + " / " + after)
+            shot("font-literata-justified")
+            // Save as PDF carries the new font and justification
+            const lay = app.exportLayout()
+            compare(lay.font, "literata"); compare(lay.justify, true); compare(lay.areaWidth, win.width - 2 * 104)
+            mouseClick(app, win.width / 2, 100)            // the page above closes the panel
+            compare(app.panel, "")
+            Bus.deliver(101, state())
         }
     }
 }

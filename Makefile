@@ -19,7 +19,7 @@ GOIMAGE  = golang:1.26-bookworm
 
 all: aarch64 armv7
 
-build/resources.rcc: app/application.qrc app/ui/*.qml
+build/resources.rcc: app/application.qrc app/ui/*.qml app/fonts/*.ttf
 	mkdir -p build
 	$(RCC) --binary -o $@ app/application.qrc
 

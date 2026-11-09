@@ -114,11 +114,46 @@ func TestBuildPDF(t *testing.T) {
 	if err := buildPDF(&buf, testPage(), req, read); err == nil {
 		t.Error("absurd font size accepted")
 	}
-	// serif
-	req.FontSize, req.Serif = 32, true
-	buf.Reset()
-	if err := buildPDF(&buf, testPage(), req, read); err != nil || !bytes.Contains(buf.Bytes(), []byte("/BaseFont /utf8ebgaramond")) {
-		t.Errorf("serif: %v", err)
+	// every typeface embeds its own font files
+	for font, want := range map[string]string{"garamond": "utf8ebgaramond", "literata": "utf8literata", "atkinson": "utf8atkinsonhyperlegible", "": "utf8notosans"} {
+		req.FontSize, req.Font = 32, font
+		buf.Reset()
+		if err := buildPDF(&buf, testPage(), req, read); err != nil || !bytes.Contains(buf.Bytes(), []byte("/BaseFont /"+want)) {
+			t.Errorf("font %q: %v", font, err)
+		}
+	}
+	req.Font = "comic"
+	if err := buildPDF(&buf, testPage(), req, read); err == nil {
+		t.Error("unknown font accepted")
+	}
+}
+
+// Justified: the blanks of every line but a paragraph's last are stretched
+// to the column's right edge.
+func TestBuildPDFJustified(t *testing.T) {
+	p := &Page{URL: "https://example.com/j", Title: "J", Secure: true, Reader: true,
+		HTML: `<p style="line-height:125%">Typography with justified lines stretches the blanks.</p><h2>Not justified here</h2>`}
+	// Qt's layout: title, empty meta, paragraph on two lines, heading
+	lines := []float64{1, 0, 88, 0, 0, 100, 36, 0, 40, 148, 44, 0, 7, 203, 44, 0, 16, 260, 66, 0}
+	req := ExportRequest{Name: "J", URL: p.URL, FontSize: 28, Width: 954, Height: 1696, X: 56, Y: 48, AreaWidth: 842,
+		Lines: lines, PageStarts: []float64{0}, PageHeights: []float64{1500}}
+	draw := func(justify bool) string {
+		req.Justify = justify
+		var buf bytes.Buffer
+		pdfCompress = false
+		defer func() { pdfCompress = true }()
+		if err := buildPDF(&buf, p, req, func(string) ([]byte, error) { return nil, os.ErrNotExist }); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+	// x of the text drawn on the first line of the paragraph ("hh" ends it)
+	xs := func(doc string) []string {
+		return regexp.MustCompile(`BT ([0-9.]+) [0-9.]+ Td`).FindAllString(doc, -1)
+	}
+	left, just := xs(draw(false)), xs(draw(true))
+	if len(just) <= len(left) {
+		t.Errorf("justified line not drawn word by word: %d vs %d runs", len(just), len(left))
 	}
 }
 

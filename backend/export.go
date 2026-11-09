@@ -170,10 +170,12 @@ type ExportRequest struct {
 	Name        string    `json:"name"` // document name, also the file name
 	URL         string    `json:"url"`
 	FontSize    float64   `json:"fontSize"`
-	Serif       bool      `json:"serif"`
-	Width       float64   `json:"width"`  // screen size: the PDF page
-	Height      float64   `json:"height"` //
-	X           float64   `json:"x"`      // where the reader area sits on the screen
+	Font        string    `json:"font"`      // see pdfFonts
+	Justify     bool      `json:"justify"`   // paragraphs are justified
+	AreaWidth   float64   `json:"areaWidth"` // width of the reader area (the text column)
+	Width       float64   `json:"width"`     // screen size: the PDF page
+	Height      float64   `json:"height"`    //
+	X           float64   `json:"x"`         // where the reader area sits on the screen
 	Y           float64   `json:"y"`
 	Lines       []float64 `json:"lines"` // per line: visible characters, y, height, x (in the text)
 	PageStarts  []float64 `json:"pageStarts"`
@@ -188,6 +190,10 @@ func (r *ExportRequest) check() error {
 		return errors.New("bad page size")
 	case r.FontSize < 10 || r.FontSize > 100:
 		return errors.New("bad font size")
+	case r.Font != "" && !validFont[r.Font]:
+		return errors.New("unknown font")
+	case r.AreaWidth < 0 || r.AreaWidth > r.Width:
+		return errors.New("bad text width")
 	case len(r.Lines)%4 != 0 || len(r.Lines)/4 > maxExportLines:
 		return errors.New("bad layout")
 	case len(r.PageStarts) == 0 || len(r.PageStarts) > maxExportPages || len(r.PageHeights) != len(r.PageStarts):
@@ -218,6 +224,8 @@ type item struct {
 	imgW     float64
 	imgH     float64
 	rule     bool
+	block    int    // which block (paragraph, list item, heading, ...) it is in
+	just     bool   // in a paragraph the reader justifies
 	heading  int    // first character of a heading: its level (1-6)
 	headText string // ... and its text
 	marker   string // first character of a list item: "•" or "3."
@@ -255,6 +263,9 @@ func pageStream(p *Page) []item {
 }
 
 type streamer struct {
+	nblocks   int
+	block     int    // current block
+	just      bool   // current block is justified (with the Justified setting)
 	titleLink string // the title links to the page on the web (not underlined, as on screen)
 	items     []item
 	pre       int
@@ -264,9 +275,26 @@ type streamer struct {
 
 var headingScale = map[int]float64{1: 2, 2: 1.5, 3: 1.2, 4: 1, 5: 0.8, 6: 1}
 
-func (s *streamer) brk() { s.items = append(s.items, item{r: ' '}) }
+func (s *streamer) brk() { s.items = append(s.items, item{r: ' ', block: s.block}) }
+
+// enter starts a new block; the returned function goes back to the outer
+// one (text after a nested block is a block of its own).
+func (s *streamer) enter(justified bool) func() {
+	prevJust := s.just
+	s.nblocks++
+	s.block, s.just = s.nblocks, justified
+	return func() {
+		s.nblocks++
+		s.block, s.just = s.nblocks, prevJust
+	}
+}
 
 func (s *streamer) add(it item) {
+	it.block, it.just = s.block, s.just
+	// Qt shows a run of blanks as one; so must the PDF
+	if s.pre == 0 && it.r == ' ' && len(s.items) > 0 && s.items[len(s.items)-1].r == ' ' {
+		return
+	}
 	if s.pending != nil && (it.r == 0 || !unicode.IsSpace(it.r)) {
 		if s.pending.heading > 0 {
 			it.heading, it.headText = s.pending.heading, s.pending.headText
@@ -377,6 +405,10 @@ func (s *streamer) walk(n *html.Node, st textStyle) {
 	}
 	if block {
 		s.brk()
+		// the reader justifies the paragraphs and list items the writer
+		// made (style="line-height:..."), not headings, captions or cells
+		leave := s.enter((n.Data == "p" || n.Data == "li") && strings.Contains(attr(n, "style"), "line-height") && attr(n, "align") == "")
+		defer leave()
 	}
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		s.walk(c, st)
@@ -393,10 +425,23 @@ var fontFS embed.FS
 
 type fontMetrics struct{ asc, desc float64 } // per em
 
-var (
-	sansMetrics  = fontMetrics{1.069, 0.293} // Noto Sans
-	serifMetrics = fontMetrics{1.007, 0.298} // EB Garamond
-)
+// pdfFonts are the reader's typefaces, embedded for the PDF (regular, bold,
+// italic, bold italic) with their ascent and descent.
+var pdfFonts = map[string]struct {
+	family string
+	files  [4]string
+	m      fontMetrics
+}{
+	"sans":     {"NotoSans", [4]string{"NotoSans-Regular", "NotoSans-Bold", "NotoSans-Italic", "NotoSans-BoldItalic"}, fontMetrics{1.069, 0.293}},
+	"garamond": {"EBGaramond", [4]string{"EBGaramond-Regular", "EBGaramond-Bold", "EBGaramond-Italic", "EBGaramond-BoldItalic"}, fontMetrics{1.007, 0.298}},
+	"literata": {"Literata", [4]string{"Literata-Regular", "Literata-Bold", "Literata-Italic", "Literata-BoldItalic"}, fontMetrics{1.177, 0.308}},
+	"atkinson": {"AtkinsonHyperlegible", [4]string{"AtkinsonHyperlegible-Regular", "AtkinsonHyperlegible-Bold", "AtkinsonHyperlegible-Italic", "AtkinsonHyperlegible-BoldItalic"}, fontMetrics{0.950, 0.290}},
+}
+
+var validFont = map[string]bool{"sans": true, "garamond": true, "literata": true, "atkinson": true}
+
+// pdfCompress: tests turn it off to read the drawing commands.
+var pdfCompress = true
 
 // ImageReader reads one of the reader's pictures (an absolute path from
 // the page HTML).
@@ -415,15 +460,15 @@ func buildPDF(w io.Writer, p *Page, req ExportRequest, readImage ImageReader) (e
 	pdf := fpdf.NewCustom(&fpdf.InitType{UnitStr: "pt", Size: fpdf.SizeType{Wd: req.Width, Ht: req.Height}})
 	pdf.SetMargins(0, 0, 0)
 	pdf.SetAutoPageBreak(false, 0)
-	pdf.SetCompression(true)
-	family, faces := "NotoSans", map[string]string{"": "NotoSans-Regular", "B": "NotoSans-Bold", "I": "NotoSans-Italic", "BI": "NotoSans-BoldItalic"}
-	metrics := sansMetrics
-	if req.Serif {
-		family, faces = "EBGaramond", map[string]string{"": "EBGaramond-Regular", "B": "EBGaramond-Bold", "I": "EBGaramond-Italic", "BI": "EBGaramond-BoldItalic"}
-		metrics = serifMetrics
+	pdf.SetCompression(pdfCompress)
+	fontKey := req.Font
+	if fontKey == "" {
+		fontKey = "sans"
 	}
-	for style, name := range faces {
-		b, err := fontFS.ReadFile("fonts/" + name + ".ttf")
+	pf := pdfFonts[fontKey]
+	family, metrics := pf.family, pf.m
+	for i, style := range []string{"", "B", "I", "BI"} {
+		b, err := fontFS.ReadFile("fonts/" + pf.files[i] + ".ttf")
 		if err != nil {
 			return err
 		}
@@ -448,6 +493,7 @@ func buildPDF(w io.Writer, p *Page, req ExportRequest, readImage ImageReader) (e
 		h     float64
 		x     float64
 		items []item
+		just  bool // stretch the blanks to the column's right edge
 	}
 	nPages := len(req.PageStarts)
 	ops := make([][]op, nPages)
@@ -482,7 +528,28 @@ func buildPDF(w io.Writer, p *Page, req ExportRequest, readImage ImageReader) (e
 		}
 		if pos > start {
 			pg := pageOf(y)
-			ops[pg] = append(ops[pg], op{y, h, x, items[start:pos]})
+			line := items[start:pos]
+			// justified like the reader: in a justified paragraph, every
+			// line but the last one (and lines ending in a line break)
+			last := -1
+			for i := range line {
+				if !line[i].space() {
+					last = i
+				}
+			}
+			just := false
+			if req.Justify && last >= 0 && line[last].just && line[last].img == "" {
+				k, hard := pos, false
+				for i := last + 1; i < len(line); i++ {
+					hard = hard || line[i].r == '\n'
+				}
+				for k < len(items) && (items[k].space() || items[k].rule) {
+					hard = hard || items[k].r == '\n' || items[k].rule
+					k++
+				}
+				just = !hard && k < len(items) && items[k].block == line[last].block
+			}
+			ops[pg] = append(ops[pg], op{y, h, x, line, just})
 		}
 	}
 	for pos < len(items) && (items[pos].space() || items[pos].rule) {
@@ -557,6 +624,34 @@ func buildPDF(w io.Writer, p *Page, req ExportRequest, readImage ImageReader) (e
 			}
 			baseline := y + metrics.asc*math.Round(base*maxScale)
 			x := req.X + o.x
+			first, last := -1, -1
+			for i, it := range o.items {
+				if !it.space() {
+					if first < 0 {
+						first = i
+					}
+					last = i
+				}
+			}
+			extra := 0.0 // added to each blank inside a justified line
+			if o.just && req.AreaWidth > 0 {
+				natural, gaps := 0.0, 0
+				for i := first; i <= last && i >= 0; i++ {
+					it := o.items[i]
+					if it.r == 0 {
+						natural += it.imgW
+						continue
+					}
+					setFont(it.st)
+					natural += pdf.GetStringWidth(string(it.r))
+					if it.space() {
+						gaps++
+					}
+				}
+				if room := req.X + req.AreaWidth - (x + natural); gaps > 0 && room > 0 && room < 0.4*req.AreaWidth {
+					extra = room / float64(gaps)
+				}
+			}
 			for i := 0; i < len(o.items); {
 				it := o.items[i]
 				switch {
@@ -609,6 +704,14 @@ func buildPDF(w io.Writer, p *Page, req ExportRequest, readImage ImageReader) (e
 						pdf.SetLink(linkFor(frag), y, -1)
 					}
 				}
+				if extra > 0 && it.space() {
+					setFont(it.st)
+					if i > first && i < last {
+						x += pdf.GetStringWidth(" ") + extra
+					}
+					i++
+					continue
+				}
 				if it.marker != "" {
 					setFont(textStyle{scale: it.st.scale})
 					mw := pdf.GetStringWidth(it.marker)
@@ -619,7 +722,7 @@ func buildPDF(w io.Writer, p *Page, req ExportRequest, readImage ImageReader) (e
 				// a run of characters in one style
 				j := i
 				var run strings.Builder
-				for j < len(o.items) && o.items[j].r != 0 && o.items[j].st == it.st && (j == i || (o.items[j].heading == 0 && o.items[j].marker == "")) {
+				for j < len(o.items) && o.items[j].r != 0 && o.items[j].st == it.st && (j == i || (o.items[j].heading == 0 && o.items[j].marker == "")) && !(extra > 0 && o.items[j].space()) {
 					r := o.items[j].r
 					if r == '\n' {
 						r = ' '
