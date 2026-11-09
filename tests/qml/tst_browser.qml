@@ -9,6 +9,9 @@ Item {
     id: win
     width: 954; height: 1696   // reMarkable Paper Pro Move
 
+    // stands for xochitl's screens under the app (AppLoad's list of apps):
+    // no tap may ever reach it
+    MouseArea { id: below; anchors.fill: parent; property int taps: 0; onPressed: taps++ }
     Loader { id: loader; anchors.fill: parent; source: "../../app/ui/main.qml" }
 
     TestCase {
@@ -325,6 +328,32 @@ Item {
             shot("pdf-no-librarian")
             tapButton("OK")
             Library.installed = true
+        }
+
+        function tapEmptySpots(label) {
+            const before = below.taps
+            for (const p of [[20, 300], [win.width / 2, win.height - 300], [win.width - 20, win.height / 2], [win.width / 2, win.height - 5], [5, 5]]) {
+                mouseClick(app, p[0], p[1])
+                wait(20)
+                app.menuOpen = false
+                if (app.panel === "settings" || app.panel === "contents") app.panel = ""
+            }
+            compare(below.taps, before, label + ": a tap fell through to the screen under the app")
+        }
+        function test_13_taps_never_fall_through() {
+            Bus.deliver(101, state())
+            Bus.deliver(107, {})                              // home
+            tapEmptySpots("home")
+            Bus.deliver(104, { q: "e-ink", results: [{ title: "One", url: "https://a.example/", snippet: "x" }], more: false, page: 0 })
+            tapEmptySpots("search results")
+            Bus.deliver(102, { message: "cannot find example.invalid", retry: true })
+            tapEmptySpots("error")
+            Bus.deliver(106, { busy: true, text: "Loading example.com …" })
+            tapEmptySpots("loading")
+            Bus.deliver(106, { busy: false, text: "" })
+            showArticle(0, 30)
+            tapEmptySpots("reader")
+            Bus.deliver(107, {})
         }
     }
 }

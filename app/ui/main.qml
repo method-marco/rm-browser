@@ -12,6 +12,16 @@ Rectangle {
     anchors.fill: parent
     color: "white"
 
+    // Every tap and swipe ends here at the latest. AppLoad shows the app on
+    // top of xochitl's own screens (its list of apps): a tap that nothing
+    // takes (empty space, a page still loading) would fall through to them
+    // and open another app.
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.AllButtons
+        onWheel: (w) => { w.accepted = true }
+    }
+
     // Required by AppLoad.
     signal close
     // Called by AppLoad when the app closes (it may call it twice). Don't
