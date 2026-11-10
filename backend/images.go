@@ -17,6 +17,7 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"net/http"
+	"sync"
 	"time"
 
 	"golang.org/x/image/draw"
@@ -26,7 +27,55 @@ import (
 const (
 	minImageSide   = 48         // smaller images are icons or tracking pixels
 	maxImagePixels = 50_000_000 // decompression bombs
+	// decoding takes width x height x 4 bytes (8 for 16-bit PNGs): pictures
+	// are decoded in parallel only while their pixels fit in this together
+	// (four 50-megapixel photos at once once took the backend to 1.5 GB and
+	// the tablet into swap); a larger one is skipped
+	decodeBudget = 160 << 20
 )
+
+// memBudget lets work start while its bytes fit in what is left.
+type memBudget struct {
+	mu   sync.Mutex
+	cond *sync.Cond
+	left int64
+}
+
+func newMemBudget(n int64) *memBudget {
+	b := &memBudget{left: n}
+	b.cond = sync.NewCond(&b.mu)
+	return b
+}
+
+func (b *memBudget) acquire(n int64) {
+	b.mu.Lock()
+	for b.left < n {
+		b.cond.Wait()
+	}
+	b.left -= n
+	b.mu.Unlock()
+}
+
+func (b *memBudget) release(n int64) {
+	b.mu.Lock()
+	b.left += n
+	b.mu.Unlock()
+	b.cond.Broadcast()
+}
+
+var decodeMem = newMemBudget(decodeBudget)
+
+// decodeBytes estimates the memory image.Decode needs for cfg.
+func decodeBytes(cfg image.Config) int64 {
+	per := int64(4)
+	switch cfg.ColorModel {
+	case color.RGBA64Model, color.NRGBA64Model:
+		per = 8
+	case color.Gray16Model:
+		per = 2
+	}
+	return int64(cfg.Width) * int64(cfg.Height) * per
+}
 
 // prepareImage downloads src and stores it scaled to fit maxW x maxH.
 // It returns the absolute file path and the shown size.
@@ -79,9 +128,12 @@ func convertImage(data []byte, maxW, maxH int, grey bool) ([]byte, int, int, err
 	if cfg.Width < minImageSide || cfg.Height < minImageSide {
 		return nil, 0, 0, fmt.Errorf("image too small")
 	}
-	if cfg.Width*cfg.Height > maxImagePixels {
+	need := decodeBytes(cfg)
+	if cfg.Width*cfg.Height > maxImagePixels || need > decodeBudget {
 		return nil, 0, 0, fmt.Errorf("image too large")
 	}
+	decodeMem.acquire(need)
+	defer decodeMem.release(need)
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, 0, 0, err

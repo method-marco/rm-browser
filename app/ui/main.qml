@@ -711,12 +711,15 @@ Rectangle {
                 wrapMode: Text.Wrap
                 font.pixelSize: 26; color: "#444"
             }
-            // swipe to turn; taps go through to the rows
+            // swipe to turn; a tap goes to the row under it (row.tapped()).
+            // Never propagateComposedEvents here: Qt hands the click on to
+            // every MouseArea under the finger in the whole window, which
+            // includes xochitl's behind the app (AppLoad's list of apps, the
+            // library): a tap on a row also launched an app or a notebook.
             MouseArea {
                 anchors.fill: parent
                 property real px: 0
                 property real py: 0
-                propagateComposedEvents: true
                 onPressed: (m) => { px = m.x; py = m.y; m.accepted = true }
                 onReleased: (m) => {
                     const dx = m.x - px, dy = m.y - py

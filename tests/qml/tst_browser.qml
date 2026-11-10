@@ -13,9 +13,10 @@ Item {
     Keys.onReleased: keysOut++
     width: 954; height: 1696   // reMarkable Paper Pro Move
 
-    // stands for xochitl's screens under the app (AppLoad's list of apps):
-    // no tap may ever reach it
-    MouseArea { id: below; anchors.fill: parent; property int taps: 0; onPressed: taps++ }
+    // stands for xochitl's screens under the app (AppLoad's list of apps,
+    // the library): no tap may ever reach it, neither the press nor a click
+    // handed on by a MouseArea with propagateComposedEvents
+    MouseArea { id: below; anchors.fill: parent; property int taps: 0; onPressed: taps++; onClicked: taps++ }
     Loader { id: loader; anchors.fill: parent; source: "../../app/ui/main.qml" }
 
     TestCase {
@@ -249,6 +250,15 @@ Item {
             shot("error")
         }
 
+        function findText(item, t) {
+            if (!item) return null
+            if (item.visible && item.text === t && item.font !== undefined) return item
+            for (let i = 0; i < item.children.length; i++) {
+                const f = findText(item.children[i], t)
+                if (f) return f
+            }
+            return null
+        }
         function findButton(item, label) {
             if (!item) return null
             if (item.visible && item.text === label && item.clicked !== undefined) return item
@@ -343,6 +353,30 @@ Item {
                 if (app.panel === "settings" || app.panel === "contents") app.panel = ""
             }
             compare(below.taps, before, label + ": a tap fell through to the screen under the app")
+        }
+        // tapping a row of a list (Recent, search results) acts on the row and
+        // nothing behind the app: it once launched the app or opened the
+        // notebook under the finger
+        function test_13b_list_rows_dont_fall_through() {
+            Bus.deliver(101, state())
+            Bus.deliver(107, {})                              // home: Recent
+            const before = below.taps
+            Bus.clear()
+            const row = findText(app, "An old page")
+            verify(row, "Recent row")
+            const p = row.mapToItem(app, 10, row.height / 2)
+            mouseClick(app, p.x, p.y)
+            verify(Bus.sent.length > 0, "the row opened its page")
+            compare(below.taps, before, "a tap on a Recent row reached the screen behind the app")
+            Bus.deliver(104, { query: "e-ink", results: [{ title: "Result one", url: "https://a.example/", snippet: "x" }], hasMore: false, page: 0 })
+            Bus.clear()
+            const res = findText(app, "Result one")
+            verify(res, "search result row")
+            const q = res.mapToItem(app, 10, res.height / 2)
+            mouseClick(app, q.x, q.y)
+            verify(Bus.sent.length > 0, "the result opened")
+            compare(below.taps, before, "a tap on a search result reached the screen behind the app")
+            Bus.deliver(107, {})
         }
         function test_13_taps_never_fall_through() {
             Bus.deliver(101, state())

@@ -11,10 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +101,7 @@ const (
 	maxStack   = 50
 	pageCache  = 12
 
+	memoryLimit    = 384 << 20 // soft limit for the backend's heap
 	maxImageCache  = 150 << 20 // converted images on disk: prune above this ...
 	keepImageCache = 100 << 20 // ... down to this, oldest first
 )
@@ -139,6 +142,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: entry <appload-socket>")
 		os.Exit(2)
 	}
+	// The tablet has 2 GB for everything: past this the Go runtime collects
+	// garbage harder and gives memory back, instead of growing into swap.
+	debug.SetMemoryLimit(memoryLimit)
 	al, err := ConnectAppLoad(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
@@ -160,6 +166,11 @@ func main() {
 	} else {
 		shared = append(shared, export.dir)
 	}
+	// DNS follows the tablet's network while the backend runs (dns.go)
+	live := openLiveDNS("/etc/resolv.conf")
+	if live != nil {
+		net.DefaultResolver = live.resolver()
+	}
 	sandbox, err := enterSandbox(jailDir(cacheDir), shared, cfgDir, cacheDir)
 	if err != nil {
 		// Never browse unsandboxed.
@@ -172,6 +183,9 @@ func main() {
 		}
 	}
 	log.Printf("rm-browser %s, sandbox: %s", version, sandbox)
+	if live != nil { // read from inside the sandbox: proves the handle works there
+		log.Printf("dns: live %s/%s, servers %v", live.dir.Name(), live.name, live.nameservers())
+	}
 
 	app := newApp(al, store)
 	app.sandbox = sandbox
@@ -730,6 +744,7 @@ func (a *App) loadPage(ctx context.Context, gen int, e Entry, reload bool) {
 			return
 		}
 		cp = &cachedPage{page: pg}
+		go debug.FreeOSMemory() // the pictures' pixels are garbage now: back to the tablet
 		if err := a.store.pruneImages(maxImageCache, keepImageCache); err != nil {
 			log.Printf("prune images: %v", err)
 		}
