@@ -122,13 +122,17 @@ to run. *Settings* shows the active layers.
 
 ## Requirements
 
-- reMarkable 1, 2, Paper Pro or Paper Pro Move with [xovi](https://github.com/asivery/xovi) +
-  [AppLoad](https://github.com/asivery/rm-appload)
+- reMarkable Paper Pro Move (tested, OS 3.29) or Paper Pro (should work, untested) with
+  [xovi](https://github.com/asivery/xovi) + [AppLoad](https://github.com/asivery/rm-appload).
+  reMarkable 1/2 builds exist but are untested, and the sandbox is weaker there (see above)
 - Wi-Fi on the tablet
 
 ## Install
 
-Download `rm-browser-aarch64.tar.gz` (Paper Pro / Move) or `rm-browser-armv7.tar.gz`
+With [vellum](https://github.com/vellum-dev/vellum), once the package is published:
+`vellum add reader-browser` (and `vellum add librarian` for Save as PDF).
+
+By hand: download `rm-browser-aarch64.tar.gz` (Paper Pro / Move) or `rm-browser-armv7.tar.gz`
 (reMarkable 1/2) from the [releases](../../releases), or build it (see below), and extract it on
 the device:
 
@@ -188,7 +192,7 @@ backend/               Go backend -> backend/entry (static, no cgo)
   fonts/               the reader's typefaces for the PDF (SIL OFL, see OFL-*.txt)
   main.go              messages, history, back/forward, clearing data
 tests/qml/             headless frontend tests (stub AppLoad module, Dockerfile)
-packaging/vellum/browser/VELBUILD
+packaging/vellum/reader-browser/VELBUILD
 ```
 
 ## License

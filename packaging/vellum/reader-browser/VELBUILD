@@ -1,14 +1,14 @@
 maintainer="mr_marco <marco_meier2210@hotmail.com>"
-pkgname=browser
+pkgname=reader-browser
 pkgver=0.1.0
 pkgrel=0
 upstream_author="method-marco"
 category="apps"
-pkgdesc="Distraction-free reader-mode web browser with DuckDuckGo search, one page per screen"
+pkgdesc="Distraction-free reader-mode web browser for AppLoad: DuckDuckGo search, paged text, Save as PDF (with librarian)"
 url="https://github.com/$upstream_author/rm-browser"
-arch="aarch64 armv7"
-license="MIT"
-depends="appload"
+arch="aarch64"
+license="MIT AND OFL-1.1"
+depends="appload remarkable-os>=3.29 remarkable-os<3.30"
 readmeurl="https://raw.githubusercontent.com/$upstream_author/rm-browser/v$pkgver/README.md"
 
 source="
@@ -22,17 +22,9 @@ build() {
 	apt-get update
 	apt-get install -y --no-install-recommends qt6-base-dev
 
-	case "$CARCH" in
-	aarch64) _goarch="arm64" _goarm="" ;;
-	armv7) _goarch="arm" _goarm="7" ;;
-	*)
-		echo "Invalid CARCH: $CARCH"
-		exit 1
-		;;
-	esac
-
+	# go.mod needs Go 1.25 (os.Root file functions); the image has 1.24
 	cd "$builddir"/backend
-	GOTOOLCHAIN=auto GOOS=linux GOARCH="$_goarch" GOARM="$_goarm" CGO_ENABLED=0 go build \
+	GOTOOLCHAIN=auto GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
 		-buildvcs=false -trimpath -ldflags="-s -w -X main.version=$pkgver" \
 		-o "$builddir"/build/backend/entry .
 
@@ -52,6 +44,10 @@ package() {
 
 	install -Dm644 LICENSE \
 		"$pkgdir"/home/root/.vellum/licenses/$pkgname/LICENSE
+	# the bundled fonts (SIL Open Font License)
+	for _f in backend/fonts/OFL-*.txt; do
+		install -Dm644 "$_f" "$pkgdir"/home/root/.vellum/licenses/$pkgname/"$(basename "$_f")"
+	done
 	echo "$url" > "$pkgdir"/home/root/.vellum/licenses/$pkgname/SOURCES
 }
 
