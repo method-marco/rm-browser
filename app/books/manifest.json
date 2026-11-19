@@ -1,0 +1,8 @@
+{
+    "id": "rm-books",
+    "name": "Books",
+    "entry": "/books/main.qml",
+    "loadsBackend": true,
+    "canHaveMultipleFrontends": false,
+    "supportsScaling": true
+}

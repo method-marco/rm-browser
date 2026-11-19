@@ -1,4 +1,6 @@
-package main
+// Package livedns keeps DNS working inside the sandbox when the tablet
+// changes networks.
+package livedns
 
 // The backend runs for days (AppLoad keeps it when the app closes), and
 // inside its chroot /etc/resolv.conf is a copy made at start. When the
@@ -20,19 +22,20 @@ import (
 	"time"
 )
 
-type liveDNS struct {
-	dir  *os.Root
-	name string
+// Live reads the tablet's current resolv.conf through a folder handle.
+type Live struct {
+	Dir  *os.Root
+	Name string
 
 	mu      sync.Mutex
 	read    time.Time
 	servers []string
 }
 
-// openLiveDNS opens the folder of the file /etc/resolv.conf points to. A
+// Open opens the folder of the file /etc/resolv.conf points to. A
 // plain /etc/resolv.conf (no link) gets nil: the copy is all there is, and
 // the sandbox shouldn't hold a handle on all of /etc.
-func openLiveDNS(path string) *liveDNS {
+func Open(path string) *Live {
 	t, err := filepath.EvalSymlinks(path)
 	if err != nil || filepath.Dir(t) == filepath.Dir(path) {
 		return nil
@@ -41,18 +44,18 @@ func openLiveDNS(path string) *liveDNS {
 	if err != nil {
 		return nil
 	}
-	return &liveDNS{dir: r, name: filepath.Base(t)}
+	return &Live{Dir: r, Name: filepath.Base(t)}
 }
 
-// nameservers are the servers in the live file, read at most every 2 s.
-func (l *liveDNS) nameservers() []string {
+// Nameservers are the servers in the live file, read at most every 2 s.
+func (l *Live) Nameservers() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if time.Since(l.read) < 2*time.Second {
 		return l.servers
 	}
 	l.read = time.Now()
-	b, err := l.dir.ReadFile(l.name)
+	b, err := l.Dir.ReadFile(l.Name)
 	if err != nil {
 		return l.servers // keep the last good list
 	}
@@ -72,20 +75,20 @@ func (l *liveDNS) nameservers() []string {
 // target: where a query Go's resolver meant for address (a server from
 // its copy of resolv.conf) goes: the same server if it is still listed,
 // else the current first one.
-func (l *liveDNS) target(address string) string {
+func (l *Live) target(address string) string {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return address
 	}
-	s := l.nameservers()
+	s := l.Nameservers()
 	if len(s) == 0 || slices.Contains(s, host) {
 		return address
 	}
 	return net.JoinHostPort(s[0], port)
 }
 
-// resolver uses the live servers.
-func (l *liveDNS) resolver() *net.Resolver {
+// Resolver uses the live servers.
+func (l *Live) Resolver() *net.Resolver {
 	return &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 		var d net.Dialer
 		return d.DialContext(ctx, network, l.target(address))

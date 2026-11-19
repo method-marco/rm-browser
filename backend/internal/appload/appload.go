@@ -1,4 +1,6 @@
-package main
+// Package appload is a minimal client for the AppLoad backend protocol
+// (asivery/rm-appload), shared by the apps in this repository.
+package appload
 
 // Minimal client for the AppLoad backend protocol (asivery/rm-appload).
 //
@@ -20,9 +22,9 @@ import (
 )
 
 const (
-	msgSystemTerminate       int32 = -1
-	msgSystemNewCoordinator  int32 = -2
-	msgSystemLostCoordinator int32 = -3
+	MsgSystemTerminate       int32 = -1
+	MsgSystemNewCoordinator  int32 = -2
+	MsgSystemLostCoordinator int32 = -3
 	maxMessageLength               = 10 * 1024 * 1024
 )
 
@@ -36,7 +38,8 @@ type AppLoad struct {
 // kernel's default (about 200 kB) is too small for long articles.
 const sendBuffer = 16 << 20
 
-func ConnectAppLoad(path string) (*AppLoad, error) {
+// Connect connects to the socket AppLoad passed as argv[1].
+func Connect(path string) (*AppLoad, error) {
 	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_SEQPACKET, 0)
 	if err != nil {
 		return nil, fmt.Errorf("socket: %w", err)

@@ -9,7 +9,7 @@ Item {
     id: win
     width: 954; height: 1696
 
-    Loader { id: loader; anchors.fill: parent; source: "../../app/ui/main.qml" }
+    Loader { id: loader; anchors.fill: parent; source: "../../app/browser/main.qml" }
 
     TestCase {
         name: "RealPages"

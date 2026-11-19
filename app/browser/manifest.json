@@ -1,7 +1,7 @@
 {
     "id": "rm-browser",
     "name": "Browser",
-    "entry": "/ui/main.qml",
+    "entry": "/browser/main.qml",
     "loadsBackend": true,
     "canHaveMultipleFrontends": false,
     "supportsScaling": true

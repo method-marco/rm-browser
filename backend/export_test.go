@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/method-marco/rm-browser/backend/internal/imaging"
+	"github.com/method-marco/rm-browser/backend/internal/typography"
 )
 
 func testPage() *Page {
@@ -52,7 +55,7 @@ func TestPageStreamCounts(t *testing.T) {
 }
 
 func TestBuildPDF(t *testing.T) {
-	jpg, _, _, err := convertImage(testPNG(t, 300, 150), 300, 150, false)
+	jpg, _, _, err := imaging.Convert(testPNG(t, 300, 150), 300, 150, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,23 +235,41 @@ func testPNG(t *testing.T, w, h int) []byte {
 // The reader and the PDF use the same typefaces: every bundled one is in
 // the app's resources (the frontend loads them from there) and here.
 func TestBundledFonts(t *testing.T) {
-	qrc, err := os.ReadFile("../app/application.qrc")
-	if err != nil {
-		t.Fatal(err)
+	var qrcs [][]byte
+	for _, app := range []string{"browser", "books"} { // both apps ship the fonts
+		qrc, err := os.ReadFile("../app/" + app + ".qrc")
+		if err != nil {
+			t.Fatal(err)
+		}
+		qrcs = append(qrcs, qrc)
 	}
 	for key, pf := range pdfFonts {
 		if key == "sans" || key == "garamond" { // on the tablet
 			continue
 		}
 		for _, f := range pf.files {
-			if !bytes.Contains(qrc, []byte("<file>fonts/"+f+".ttf</file>")) {
-				t.Errorf("%s.ttf is not in app/application.qrc", f)
+			for i, qrc := range qrcs {
+				if !bytes.Contains(qrc, []byte("<file>fonts/"+f+".ttf</file>")) {
+					t.Errorf("%s.ttf is not in app %d's .qrc", f, i)
+				}
 			}
 			a, err1 := os.ReadFile("../app/fonts/" + f + ".ttf")
 			b, err2 := fontFS.ReadFile("fonts/" + f + ".ttf")
 			if err1 != nil || err2 != nil || !bytes.Equal(a, b) {
 				t.Errorf("%s.ttf differs between app/fonts and backend/fonts", f)
 			}
+		}
+	}
+}
+
+// every typeface of the Font panel is embedded for the PDF, and no other
+func TestPDFFontsMatchTypography(t *testing.T) {
+	if len(pdfFonts) != len(typography.Fonts) {
+		t.Fatalf("%d PDF fonts, %d typography fonts", len(pdfFonts), len(typography.Fonts))
+	}
+	for _, f := range typography.Fonts {
+		if _, ok := pdfFonts[f]; !ok {
+			t.Errorf("%s has no PDF font", f)
 		}
 	}
 }

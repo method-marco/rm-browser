@@ -1,8 +1,8 @@
 //go:build seccomptrace
 
-package main
+package sandbox
 
 // Build with -tags seccomptrace to record the system calls the backend
 // makes (scripts/trace-syscalls.sh): Landlock's all-threads restriction
 // hangs under strace, so this build skips it. Never used for releases.
-func init() { useLandlock = false }
+func init() { UseLandlock = false }

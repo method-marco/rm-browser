@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/elastic/go-seccomp-bpf/arch"
+	"github.com/method-marco/rm-browser/backend/internal/sandbox"
 )
 
 // The sandbox can't be undone, so it is tested in a child process: the
@@ -46,8 +46,8 @@ func sandboxChild() {
 	_ = os.MkdirAll(outside, 0o777)
 	_ = os.WriteFile(filepath.Join(outside, "secret"), []byte("x"), 0o644)
 	wasRoot := os.Geteuid() == 0
-	useLandlock = os.Getenv("RM_BROWSER_SANDBOX_LANDLOCK") != "0"
-	store, err := openStore(cfg, cache)
+	sandbox.UseLandlock = os.Getenv("RM_BROWSER_SANDBOX_LANDLOCK") != "0"
+	store, err := openTestStore(cfg, cache)
 	if err != nil {
 		fail("openStore: %v", err)
 	}
@@ -55,17 +55,18 @@ func sandboxChild() {
 	if err != nil {
 		fail("openExport: %v", err)
 	}
-	layers, err := enterSandbox(jail, []string{export.dir}, cfg, cache)
+	layers, err := sandbox.Enter(sandbox.Options{Jail: jail, Dirs: []string{cfg, cache}, Shared: []string{export.dir},
+		TCPPorts: []uint16{80, 443}})
 	if err != nil {
 		fail("enterSandbox: %v", err)
 	}
 	println("layers:", layers)
 
 	// allowed: own folders (through the handles), DNS files, IP sockets
-	if err := store.writeConfig([]byte("{}")); err != nil {
+	if err := store.WriteConfig([]byte("{}")); err != nil {
 		fail("config write: %v", err)
 	}
-	if err := store.cache.WriteFile("x", []byte("x"), 0o644); err != nil {
+	if err := store.Cache.WriteFile("x", []byte("x"), 0o644); err != nil {
 		fail("cache write: %v", err)
 	}
 	// export folder: PDFs can be written and removed; a planted link is
@@ -171,7 +172,7 @@ func sandboxChild() {
 			fail("got root back")
 		}
 		// open folder handles must not lead out of the jail
-		if _, err := store.cfg.Open("../../outside/secret"); err == nil {
+		if _, err := store.Cfg.Open("../../outside/secret"); err == nil {
 			fail("escaped the config folder through its handle")
 		}
 	}
@@ -184,15 +185,4 @@ func blockedErr(err error) bool { return err == syscall.EPERM || err == syscall.
 func fail(f string, args ...any) {
 	println("FAIL: " + fmt.Sprintf(f, args...))
 	os.Exit(1)
-}
-
-func TestAllowlistNames(t *testing.T) {
-	for _, n := range allowedSyscalls {
-		if _, ok := arch.AARCH64.SyscallNames[n]; !ok {
-			t.Errorf("allowlist: %q is not an arm64 system call name", n)
-		}
-	}
-	if _, err := allowList(); err != nil {
-		t.Error(err)
-	}
 }

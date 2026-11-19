@@ -30,7 +30,7 @@ build() {
 
 	cd "$builddir"/app
 	/usr/lib/qt6/libexec/rcc --binary \
-		-o "$builddir"/build/resources.rcc application.qrc
+		-o "$builddir"/build/resources.rcc browser.qrc
 }
 
 package() {
@@ -39,8 +39,8 @@ package() {
 	cd "$builddir"
 	install -Dm755 build/backend/entry "$_appdir"/backend/entry
 	install -Dm644 build/resources.rcc "$_appdir"/resources.rcc
-	install -Dm644 app/manifest.json "$_appdir"/manifest.json
-	install -Dm644 app/icon.png "$_appdir"/icon.png
+	install -Dm644 app/browser/manifest.json "$_appdir"/manifest.json
+	install -Dm644 app/browser/icon.png "$_appdir"/icon.png
 
 	install -Dm644 LICENSE \
 		"$pkgdir"/home/root/.vellum/licenses/$pkgname/LICENSE

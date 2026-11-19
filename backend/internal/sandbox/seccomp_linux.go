@@ -1,4 +1,4 @@
-package main
+package sandbox
 
 // The seccomp filter. On arm64 it is an allowlist: only the system calls
 // the backend was seen to make (scripts/trace-syscalls.sh, plus all calls

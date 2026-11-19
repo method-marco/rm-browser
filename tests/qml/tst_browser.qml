@@ -17,7 +17,7 @@ Item {
     // the library): no tap may ever reach it, neither the press nor a click
     // handed on by a MouseArea with propagateComposedEvents
     MouseArea { id: below; anchors.fill: parent; property int taps: 0; onPressed: taps++; onClicked: taps++ }
-    Loader { id: loader; anchors.fill: parent; source: "../../app/ui/main.qml" }
+    Loader { id: loader; anchors.fill: parent; source: "../../app/browser/main.qml" }
 
     TestCase {
         id: tc
@@ -474,6 +474,17 @@ Item {
             keyClick(Qt.Key_Enter); keyClick(Qt.Key_Escape); keyClick(Qt.Key_Tab); keyClick(Qt.Key_PageDown)
             compare(win.keysOut, 0, "keys went on to xochitl")
             Bus.deliver(107, {})
+        }
+
+        // themes are shared with Books: the browser follows its own setting
+        function test_15b_themes() {
+            Bus.deliver(101, state({ settings: { fontSize: 32, font: "sans", safeSearch: "moderate", noImages: false, theme: "nightshift" } }))
+            showArticle(0, 20)
+            tryCompare(app, "color", "#e8c994")
+            compare(String(te.color), "#000000")
+            shot("theme-nightshift")
+            Bus.deliver(101, state())
+            tryCompare(app, "color", "#ffffff")
         }
 
         // tablet turned sideways: two pages side by side, turned two at a time

@@ -1,6 +1,15 @@
 <RCC>
     <qresource>
-        <file>ui/main.qml</file>
+        <file>books/main.qml</file>
+        <file>shared/qmldir</file>
+        <file>shared/fonts.js</file>
+        <file>shared/EButton.qml</file>
+        <file>shared/Field.qml</file>
+        <file>shared/PagedList.qml</file>
+        <file>shared/ReaderView.qml</file>
+        <file>shared/FontPanel.qml</file>
+        <file>shared/FullScreen.qml</file>
+        <file>shared/Theme.qml</file>
         <file>fonts/AtkinsonHyperlegible-Bold.ttf</file>
         <file>fonts/AtkinsonHyperlegible-BoldItalic.ttf</file>
         <file>fonts/AtkinsonHyperlegible-Italic.ttf</file>

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/method-marco/rm-browser/backend/internal/imaging"
 	"golang.org/x/net/html"
 )
 
@@ -62,7 +63,7 @@ func isTrackerImage(n *html.Node, src string) bool {
 	if n != nil {
 		// declared tiny: width="1" height="1" and the like
 		for _, a := range []string{"width", "height"} {
-			if v, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(attr(n, a)), "px")); err == nil && v >= 0 && v < minImageSide {
+			if v, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(attr(n, a)), "px")); err == nil && v >= 0 && v < imaging.MinImageSide {
 				return true
 			}
 		}

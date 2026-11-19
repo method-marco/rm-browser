@@ -59,7 +59,7 @@ func livePage(t *testing.T, c *http.Client, u string) *Page {
 	// RM_BROWSER_FIXTURE=dir: real images, and the page as JSON for the QML test
 	fixture := os.Getenv("RM_BROWSER_FIXTURE")
 	if fixture != "" {
-		store, err := openStore(fixture+"/cfg", fixture+"/cache")
+		store, err := openTestStore(fixture+"/cfg", fixture+"/cache")
 		if err != nil {
 			t.Fatal(err)
 		}

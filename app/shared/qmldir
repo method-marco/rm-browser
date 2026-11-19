@@ -1,0 +1,7 @@
+EButton 1.0 EButton.qml
+Field 1.0 Field.qml
+PagedList 1.0 PagedList.qml
+ReaderView 1.0 ReaderView.qml
+FontPanel 1.0 FontPanel.qml
+FullScreen 1.0 FullScreen.qml
+singleton Theme 1.0 Theme.qml

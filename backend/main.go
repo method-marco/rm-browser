@@ -20,6 +20,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/method-marco/rm-browser/backend/internal/appload"
+	"github.com/method-marco/rm-browser/backend/internal/livedns"
+	"github.com/method-marco/rm-browser/backend/internal/sandbox"
+	"github.com/method-marco/rm-browser/backend/internal/store"
+	"github.com/method-marco/rm-browser/backend/internal/typography"
 )
 
 var version = "dev"
@@ -57,20 +63,16 @@ const (
 	resPDF     = 109 // {path, title}: the PDF is ready to be imported
 )
 
-// the reader's text size in pixels (the Font panel's A− and A+)
-const minFontSize, maxFontSize = 16, 96
+// the browser's reading defaults (the Books app has its own)
+var defaultTypography = typography.Settings{FontSize: 32, Font: "sans", LineSpacing: 125, Align: "left", Margin: "normal", Paragraphs: "spaced"}
 
 type Settings struct {
-	FontSize    int    `json:"fontSize"`        // reader text size in pixels
-	Serif       bool   `json:"serif,omitempty"` // old setting, read once into Font
-	Font        string `json:"font"`            // a key of pdfFonts
-	LineSpacing int    `json:"lineSpacing"`     // percent of the font's line height
-	Align       string `json:"align"`           // left | justify
-	Margin      string `json:"margin"`          // narrow | normal | wide
-	SafeSearch  string `json:"safeSearch"`      // moderate | strict | off
-	NoImages    bool   `json:"noImages"`
-	GreyImages  bool   `json:"greyImages"` // default: colour
-	AllowHTTP   bool   `json:"allowHTTP"`  // default: HTTPS only
+	typography.Settings        // font, size, spacing, alignment, margins (the Font panel)
+	Serif               bool   `json:"serif,omitempty"` // old setting, read once into Font
+	SafeSearch          string `json:"safeSearch"`      // moderate | strict | off
+	NoImages            bool   `json:"noImages"`
+	GreyImages          bool   `json:"greyImages"` // default: colour
+	AllowHTTP           bool   `json:"allowHTTP"`  // default: HTTPS only
 }
 
 // Entry is one step in the tab's history.
@@ -107,8 +109,8 @@ const (
 )
 
 type App struct {
-	al    *AppLoad
-	store *Store
+	al    *appload.AppLoad
+	store *store.Store
 
 	mu      sync.Mutex // guards everything below
 	cfg     Config
@@ -145,7 +147,7 @@ func main() {
 	// The tablet has 2 GB for everything: past this the Go runtime collects
 	// garbage harder and gives memory back, instead of growing into swap.
 	debug.SetMemoryLimit(memoryLimit)
-	al, err := ConnectAppLoad(os.Args[1])
+	al, err := appload.Connect(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -153,7 +155,7 @@ func main() {
 
 	cfgDir, cacheDir := configDir(), cacheDirPath()
 	// Open our folders before the sandbox takes away access to /home/root.
-	store, err := openStore(cfgDir, cacheDir)
+	store, err := store.Open(cfgDir, cacheDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -167,11 +169,12 @@ func main() {
 		shared = append(shared, export.dir)
 	}
 	// DNS follows the tablet's network while the backend runs (dns.go)
-	live := openLiveDNS("/etc/resolv.conf")
+	live := livedns.Open("/etc/resolv.conf")
 	if live != nil {
-		net.DefaultResolver = live.resolver()
+		net.DefaultResolver = live.Resolver()
 	}
-	sandbox, err := enterSandbox(jailDir(cacheDir), shared, cfgDir, cacheDir)
+	layers, err := sandbox.Enter(sandbox.Options{Jail: jailDir(cacheDir), Dirs: []string{cfgDir, cacheDir}, Shared: shared,
+		TCPPorts: []uint16{80, 443, 8080, 8443}})
 	if err != nil {
 		// Never browse unsandboxed.
 		log.Printf("sandbox: %v", err)
@@ -182,13 +185,13 @@ func main() {
 			}
 		}
 	}
-	log.Printf("rm-browser %s, sandbox: %s", version, sandbox)
+	log.Printf("rm-browser %s, sandbox: %s", version, layers)
 	if live != nil { // read from inside the sandbox: proves the handle works there
-		log.Printf("dns: live %s/%s, servers %v", live.dir.Name(), live.name, live.nameservers())
+		log.Printf("dns: live %s/%s, servers %v", live.Dir.Name(), live.Name, live.Nameservers())
 	}
 
 	app := newApp(al, store)
-	app.sandbox = sandbox
+	app.sandbox = layers
 	app.export = export
 	for {
 		typ, contents, err := al.Receive()
@@ -197,17 +200,17 @@ func main() {
 			return
 		}
 		switch typ {
-		case msgSystemTerminate:
+		case appload.MsgSystemTerminate:
 			return
-		case msgSystemNewCoordinator, msgSystemLostCoordinator:
+		case appload.MsgSystemNewCoordinator, appload.MsgSystemLostCoordinator:
 			continue
 		}
 		app.handle(int(typ), contents)
 	}
 }
 
-func newApp(al *AppLoad, store *Store) *App {
-	a := &App{al: al, store: store, http: newHTTPClient(), cache: map[string]*cachedPage{}, vpW: 860, vpH: 1400}
+func newApp(al *appload.AppLoad, st *store.Store) *App {
+	a := &App{al: al, store: st, http: newHTTPClient(), cache: map[string]*cachedPage{}, vpW: 860, vpH: 1400}
 	a.loadConfig()
 	return a
 }
@@ -253,7 +256,7 @@ func (a *App) send(typ int, v any) {
 	}
 	if err := a.al.Send(int32(typ), mustJSON(v)); err != nil {
 		log.Printf("send %d: %v", typ, err)
-		if errors.Is(err, ErrTooLarge) && typ == resPage {
+		if errors.Is(err, appload.ErrTooLarge) && typ == resPage {
 			_ = a.al.Send(resError, mustJSON(map[string]any{"message": "This page is too large to show.", "retry": false}))
 		}
 	}
@@ -286,29 +289,16 @@ func (a *App) client() *http.Client {
 // ---------------------------------------------------------------- config
 
 func (a *App) loadConfig() {
-	if b, err := a.store.cfg.ReadFile("config.json"); err == nil {
+	if b, err := a.store.Cfg.ReadFile("config.json"); err == nil {
 		_ = json.Unmarshal(b, &a.cfg)
 	}
 	s := &a.cfg.Settings
-	if s.FontSize < minFontSize || s.FontSize > maxFontSize {
-		s.FontSize = 32
+	def := defaultTypography
+	if s.Serif {
+		def.Font = "garamond"
 	}
-	if !validFont[s.Font] {
-		s.Font = "sans"
-		if s.Serif {
-			s.Font = "garamond"
-		}
-	}
+	s.Settings.Normalize(def)
 	s.Serif = false
-	if s.LineSpacing < 100 || s.LineSpacing > 200 {
-		s.LineSpacing = 125
-	}
-	if s.Align != "justify" {
-		s.Align = "left"
-	}
-	if s.Margin != "narrow" && s.Margin != "wide" {
-		s.Margin = "normal"
-	}
 	if s.SafeSearch == "" {
 		s.SafeSearch = "moderate"
 	}
@@ -324,7 +314,7 @@ func (a *App) saveLocked() {
 	if err != nil {
 		return
 	}
-	if err := a.store.writeConfig(b); err != nil {
+	if err := a.store.WriteConfig(b); err != nil {
 		log.Printf("save config: %v", err)
 	}
 }
@@ -341,7 +331,7 @@ func (a *App) stateLocked() map[string]any {
 		"canForward": a.cfg.Pos >= 0 && a.cfg.Pos < len(a.cfg.Stack)-1,
 		"version":    version,
 		"sandbox":    a.sandbox,
-		"imageDir":   a.store.cachePath("img"),
+		"imageDir":   a.store.CachePath("img"),
 		"exportDir":  a.exportDir(),
 	}
 }
@@ -405,20 +395,16 @@ func (a *App) addHistory(it HistoryItem) {
 
 func (a *App) handle(typ int, contents string) {
 	var req struct {
-		Input       string  `json:"input"`
-		Q           string  `json:"q"`
-		Page        int     `json:"page"`
-		Width       int     `json:"width"`
-		Height      int     `json:"height"`
-		FontSize    *int    `json:"fontSize"`
-		Font        *string `json:"font"`
-		LineSpacing *int    `json:"lineSpacing"`
-		Align       *string `json:"align"`
-		Margin      *string `json:"margin"`
-		SafeSearch  *string `json:"safeSearch"`
-		NoImages    *bool   `json:"noImages"`
-		GreyImages  *bool   `json:"greyImages"`
-		AllowHTTP   *bool   `json:"allowHTTP"`
+		Input  string `json:"input"`
+		Q      string `json:"q"`
+		Page   int    `json:"page"`
+		Width  int    `json:"width"`
+		Height int    `json:"height"`
+		typography.Update
+		SafeSearch *string `json:"safeSearch"`
+		NoImages   *bool   `json:"noImages"`
+		GreyImages *bool   `json:"greyImages"`
+		AllowHTTP  *bool   `json:"allowHTTP"`
 	}
 	if contents != "" {
 		if err := json.Unmarshal([]byte(contents), &req); err != nil {
@@ -504,21 +490,7 @@ func (a *App) handle(typ int, contents string) {
 	case reqSettings:
 		a.mu.Lock()
 		s := &a.cfg.Settings
-		if req.FontSize != nil && *req.FontSize >= minFontSize && *req.FontSize <= maxFontSize {
-			s.FontSize = *req.FontSize
-		}
-		if req.Font != nil && validFont[*req.Font] {
-			s.Font = *req.Font
-		}
-		if req.LineSpacing != nil && *req.LineSpacing >= 100 && *req.LineSpacing <= 200 {
-			s.LineSpacing = *req.LineSpacing
-		}
-		if req.Align != nil && (*req.Align == "left" || *req.Align == "justify") {
-			s.Align = *req.Align
-		}
-		if req.Margin != nil && (*req.Margin == "narrow" || *req.Margin == "normal" || *req.Margin == "wide") {
-			s.Margin = *req.Margin
-		}
+		s.Settings.Apply(req.Update)
 		if req.SafeSearch != nil {
 			switch *req.SafeSearch {
 			case "moderate", "strict", "off":
@@ -745,7 +717,7 @@ func (a *App) loadPage(ctx context.Context, gen int, e Entry, reload bool) {
 		}
 		cp = &cachedPage{page: pg}
 		go debug.FreeOSMemory() // the pictures' pixels are garbage now: back to the tablet
-		if err := a.store.pruneImages(maxImageCache, keepImageCache); err != nil {
+		if err := a.store.PruneImages(maxImageCache, keepImageCache); err != nil {
 			log.Printf("prune images: %v", err)
 		}
 		a.mu.Lock()
@@ -838,11 +810,11 @@ func (a *App) savePDF(er ExportRequest) {
 // readImage reads one of the reader's pictures for the PDF: only from the
 // image cache.
 func (a *App) readImage(path string) ([]byte, error) {
-	prefix := a.store.cachePath("img") + "/"
+	prefix := a.store.CachePath("img") + "/"
 	if !strings.HasPrefix(path, prefix) {
 		return nil, errors.New("not a cached picture")
 	}
-	return a.store.cache.ReadFile("img/" + strings.TrimPrefix(path, prefix))
+	return a.store.Cache.ReadFile("img/" + strings.TrimPrefix(path, prefix))
 }
 
 // newSession forgets cookies and open connections; it runs when the app
@@ -883,7 +855,7 @@ func (a *App) clearData() {
 	if a.export != nil {
 		a.export.clear()
 	}
-	err := a.store.clearCache()
+	err := a.store.ClearCache()
 	a.busy(false, "")
 	a.sendState()
 	a.send(resHome, map[string]any{})

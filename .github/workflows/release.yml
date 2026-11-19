@@ -41,6 +41,8 @@ jobs:
           files: |
             dist/rm-browser-aarch64.tar.gz
             dist/rm-browser-armv7.tar.gz
+            dist/rm-books-aarch64.tar.gz
+            dist/rm-books-armv7.tar.gz
             dist/SHA512SUMS
 
   # Dependabot's updates (Go modules, actions) merge themselves once the

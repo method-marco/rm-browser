@@ -1,4 +1,5 @@
-package main
+// Package store holds an app backend's two folders (settings and cache).
+package store
 
 // Store holds handles to the backend's two folders, opened as root before
 // the sandbox drops privileges (os.Root works relative to the open folder,
@@ -14,12 +15,13 @@ import (
 )
 
 type Store struct {
-	cfg      *os.Root
-	cache    *os.Root
+	Cfg      *os.Root // settings (config.json)
+	Cache    *os.Root // converted images and other cached files
 	cacheDir string
 }
 
-func openStore(cfgDir, cacheDir string) (*Store, error) {
+// Open creates and opens both folders.
+func Open(cfgDir, cacheDir string) (*Store, error) {
 	for _, d := range []string{cfgDir, cacheDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
@@ -38,23 +40,23 @@ func openStore(cfgDir, cacheDir string) (*Store, error) {
 	if err != nil {
 		abs = cacheDir
 	}
-	return &Store{cfg: c, cache: k, cacheDir: abs}, nil
+	return &Store{Cfg: c, Cache: k, cacheDir: abs}, nil
 }
 
-// cachePath is the absolute path of a cache file, for the frontend.
-func (s *Store) cachePath(name string) string { return filepath.Join(s.cacheDir, name) }
+// CachePath is the absolute path of a cache file, for the frontend.
+func (s *Store) CachePath(name string) string { return filepath.Join(s.cacheDir, name) }
 
-// writeConfig replaces config.json atomically.
-func (s *Store) writeConfig(b []byte) error {
-	if err := s.cfg.WriteFile("config.json.tmp", b, 0o600); err != nil {
+// WriteConfig replaces config.json atomically.
+func (s *Store) WriteConfig(b []byte) error {
+	if err := s.Cfg.WriteFile("config.json.tmp", b, 0o600); err != nil {
 		return err
 	}
-	return s.cfg.Rename("config.json.tmp", "config.json")
+	return s.Cfg.Rename("config.json.tmp", "config.json")
 }
 
-// clearCache deletes everything in the cache folder.
-func (s *Store) clearCache() error {
-	d, err := s.cache.Open(".")
+// ClearCache deletes everything in the cache folder.
+func (s *Store) ClearCache() error {
+	d, err := s.Cache.Open(".")
 	if err != nil {
 		return err
 	}
@@ -65,17 +67,17 @@ func (s *Store) clearCache() error {
 	}
 	var errs []error
 	for _, n := range names {
-		if err := s.cache.RemoveAll(n); err != nil {
+		if err := s.Cache.RemoveAll(n); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// pruneImages deletes the oldest converted images once they take more
+// PruneImages deletes the oldest converted images once they take more
 // than max bytes, until they take at most keep.
-func (s *Store) pruneImages(max, keep int64) error {
-	d, err := s.cache.Open("img")
+func (s *Store) PruneImages(max, keep int64) error {
+	d, err := s.Cache.Open("img")
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -110,7 +112,7 @@ func (s *Store) pruneImages(max, keep int64) error {
 		if total <= keep {
 			break
 		}
-		if err := s.cache.Remove("img/" + f.name); err == nil {
+		if err := s.Cache.Remove("img/" + f.name); err == nil {
 			total -= f.size
 		}
 	}

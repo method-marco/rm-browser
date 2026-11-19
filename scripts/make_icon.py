@@ -1,4 +1,4 @@
-"""Generate app/icon.png (a globe over a page of text) with only the stdlib.
+"""Generate app/browser/icon.png (a globe over a page of text) with only the stdlib.
 
 Black on white for e-ink, anti-aliased by 4x4 supersampling.
 """
@@ -54,7 +54,7 @@ def chunk(t, data):
 
 png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 0, 0, 0, 0))
 png += chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b"")
-out = sys.argv[1] if len(sys.argv) > 1 else "app/icon.png"
+out = sys.argv[1] if len(sys.argv) > 1 else "app/browser/icon.png"
 with open(out, "wb") as f:
     f.write(png)
 print("wrote", out)

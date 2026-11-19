@@ -6,11 +6,13 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import net.asivery.AppLoad 1.0
+import "../shared"
+import "../shared/fonts.js" as Fonts
 
 Rectangle {
     id: root
     anchors.fill: parent
-    color: "white"
+    color: Theme.paper
 
     // Every tap and swipe ends here at the latest. AppLoad shows the app on
     // top of xochitl's own screens (its list of apps): a tap that nothing
@@ -44,9 +46,7 @@ Rectangle {
     // half-destroyed app.
     function cleanUpForClose() {
         suggestTimer.stop()
-        paginateTimer.stop()
-        setTextTimer.stop()
-        viewportTimer.stop()
+        reader.stopTimers()
         toastTimer.stop()
         exportTimer.stop()
         exporting = false
@@ -82,81 +82,18 @@ Rectangle {
                                           safeSearch: "moderate", noImages: false, greyImages: false, allowHTTP: false },
                               history: [], canBack: false, canForward: false, sandbox: "", version: "" })
     readonly property var settings: appState.settings || {}
+    // colours (app/shared/Theme.qml)
+    Binding { target: Theme; property: "theme"; value: settings.theme || "default" }
 
-    // ---- fonts and layout (the Font panel) ----
-    // Noto Sans and EB Garamond come with the tablet; the others come with
-    // the app (SIL OFL, app/fonts). The backend embeds the same files for
-    // Save as PDF (backend/fonts, pdfFonts in export.go): keep both in step.
-    readonly property var fontChoices: [
-        { key: "sans", label: "Noto Sans", family: "Noto Sans", group: "sans" },
-        { key: "inter", label: "Inter", family: "Inter", file: "Inter", group: "sans" },
-        { key: "plexsans", label: "Plex Sans", family: "IBM Plex Sans", file: "IBMPlexSans", group: "sans" },
-        { key: "atkinson", label: "Atkinson", family: "Atkinson Hyperlegible", file: "AtkinsonHyperlegible", group: "sans" },
-        { key: "garamond", label: "Garamond", family: "EB Garamond", group: "serif" },
-        { key: "literata", label: "Literata", family: "Literata", file: "Literata", group: "serif" },
-        { key: "merriweather", label: "Merriweather", family: "Merriweather", file: "Merriweather", group: "serif" },
-        { key: "sourceserif", label: "Source Serif", family: "Source Serif 4", file: "SourceSerif4", group: "serif" },
-        { key: "lora", label: "Lora", family: "Lora", file: "Lora", group: "serif" },
-        { key: "crimson", label: "Crimson", family: "Crimson Pro", file: "CrimsonPro", group: "serif" },
-        { key: "bitter", label: "Bitter", family: "Bitter", file: "Bitter", group: "serif" },
-        { key: "plexmono", label: "Plex Mono", family: "IBM Plex Mono", file: "IBMPlexMono", group: "mono" }
-    ]
-    Instantiator {
-        model: {
-            let files = []
-            for (const f of fontChoices)
-                if (f.file) for (const s of ["Regular", "Bold", "Italic", "BoldItalic"]) files.push("../fonts/" + f.file + "-" + s + ".ttf")
-            return files
-        }
-        delegate: FontLoader { source: modelData }
-    }
-    readonly property var fontGroups: [{ key: "sans", title: "Sans serif" }, { key: "serif", title: "Serif" },
-                                       { key: "mono", title: "Monospace" }]
-    property bool fontListOpen: false
-    onPanelChanged: fontListOpen = false
-    function currentFont() {
-        for (const f of fontChoices) if (f.key === (settings.font || "sans")) return f
-        return fontChoices[0]
-    }
-    readonly property int minFontSize: 16
-    readonly property int maxFontSize: 96
-    // finer steps for small text, bigger ones for large
-    function fontStep(up) { return (up ? root.fontSize >= 40 : root.fontSize > 40) ? 4 : 2 }
-    function familyOf(key) {
-        for (const f of fontChoices) if (f.key === key) return f.family
-        return "Noto Sans"
-    }
-    readonly property int fontSize: settings.fontSize || 32
-    readonly property int lineSpacing: settings.lineSpacing || 125
-    readonly property bool justified: settings.align === "justify"
-    readonly property int sideMargin: settings.margin === "narrow" ? 24 : settings.margin === "wide" ? 104 : 56
-    // Tablet turned sideways (xochitl then gives the app a wide window): two
-    // pages side by side like an open book, turned two at a time. The left
-    // page is always an even one, so the spreads stay the same.
-    readonly property bool spread: root.width > root.height
-    readonly property int gutter: Math.max(48, sideMargin)
-    readonly property int pageStep: spread ? 2 : 1
-    // line spacing and alignment live in the page's rich text: rewrite the
-    // paragraphs the backend wrote (style="line-height:125%")
-    function restyle(h) {
-        let out = String(h).replace(/line-height:125%/g, "line-height:" + lineSpacing + "%")
-        if (justified) out = out.replace(/<(p|li) style="line-height/g, '<$1 align="justify" style="line-height')
-        return out
-    }
-    property string layoutKey: lineSpacing + "|" + justified
-    onLayoutKeyChanged: if (view === "page" && pageData) rerender()
-    // the same page again with the new layout, keeping the reading position
-    function rerender() {
-        recordTop()
-        const keep = topCharPos
-        pageHtml = ""
-        nextHtml = pageHeader(pageData) + restyle(safeHtml(pageData.html))
-        setTextTimer.restart()
-        topCharPos = keep
-        schedulePaginate()
-    }
+    // ---- fonts and layout (the Font panel, app/shared) ----
+    readonly property var fontChoices: Fonts.choices
+    function familyOf(key) { return Fonts.familyOf(key) }
+    readonly property int fontSize: reader.fontSize
+    readonly property bool justified: reader.justified
+    readonly property alias sideMargin: reader.sideMargin
+    readonly property alias spread: reader.spread
     function setSetting(obj) {
-        recordTop()
+        reader.recordTop()
         send(reqSettings, obj)
     }
     property string view: "home"        // home | page | search | error
@@ -167,16 +104,16 @@ Rectangle {
     property bool errorRetry: false
     property string toast: ""
 
-    // reader page
+    // reader page (the pages themselves: ReaderView, app/shared)
     property var pageData: null
-    property string pageHtml: ""
-    property var pageStarts: [0]        // y of each screen page in the text
-    property var pageHeights: [1]       // visible height of each page (no line is cut in half)
-    property int pageIndex: 0
-    property int pendingPosition: -1    // page to show once the text is laid out
-    property int topCharPos: -1         // first character on screen: kept when the text reflows
     property var headingPages: []       // page of each heading, -1 = not found
-    readonly property int pageCount: pageStarts.length
+    readonly property alias pageStarts: reader.pageStarts
+    readonly property alias pageHeights: reader.pageHeights
+    readonly property alias pageIndex: reader.pageIndex
+    readonly property alias pageCount: reader.pageCount
+    readonly property alias topCharPos: reader.topCharPos
+    readonly property var te: reader.textEdit
+    readonly property var readerArea: reader.area
 
     // search results
     property string searchQuery: ""
@@ -241,7 +178,7 @@ Rectangle {
             case 107:
                 view = "home"
                 pageData = null
-                pageHtml = ""
+                reader.clear()
                 menuOpen = false
                 if (panel !== "settings" && panel !== "confirm") panel = ""
                 break
@@ -252,7 +189,7 @@ Rectangle {
     }
 
     Component.onCompleted: {
-        fullscreenOnly()
+        fullScreen.start(root.parent)
         initTimer.start()
     }
     // Wait one moment so that the reader area has its size: the backend
@@ -260,36 +197,10 @@ Rectangle {
     Timer {
         id: initTimer
         interval: 50
-        onTriggered: send(reqInit, viewport())
-    }
-    function viewport() {
-        return { width: Math.floor(readerArea.width), height: Math.floor(readerArea.height * 0.8) }
+        onTriggered: send(reqInit, reader.viewport())
     }
 
-    // Reading only makes sense full screen, so hide the minimise and
-    // maximise buttons of AppLoad's window bar (only close stays). AppLoad
-    // offers this through the manifest only for native apps, so find our
-    // AppLoad window up the parent chain and set its flag ourselves. If a
-    // future AppLoad changes this, nothing is found and nothing happens.
-    property var appWindow: null
-    function fullscreenOnly() {
-        for (let p = root.parent; p; p = p.parent) {
-            if (typeof p.disablesWindowedMode === "boolean") {
-                appWindow = p
-                p.disablesWindowedMode = true
-                fullscreenCheck.start()
-                return
-            }
-        }
-    }
-    Timer {
-        id: fullscreenCheck
-        interval: 1500
-        onTriggered: {
-            if (appWindow && appWindow.fullscreen === false && typeof appWindow.maximize === "function")
-                appWindow.maximize()
-        }
-    }
+    FullScreen { id: fullScreen }   // app/shared: no windowed mode
 
     Timer { id: toastTimer; interval: 4000; onTriggered: toast = "" }
     function showToast(t) { toast = t; toastTimer.restart() }
@@ -486,44 +397,16 @@ Rectangle {
     }
 
     // ------------------------------------------------------------ reader
-    // Defence in depth: the backend already writes only safe rich text, but
-    // xochitl (which shows it) runs as root, so check again here: images
-    // only from the backend's image folder, nothing else Qt could load.
-    function safeHtml(h) {
-        const dir = appState.imageDir ? "file://" + appState.imageDir + "/" : ""
-        return String(h || "")
-            .replace(/<img\b[^>]*>/gi, function (tag) {
-                const m = tag.match(/\bsrc="([^"]*)"/i)
-                return dir !== "" && m && m[1].indexOf(dir) === 0 && m[1].indexOf("..") < 0 ? tag : ""
-            })
-            .replace(/\bbackground\s*=\s*"[^"]*"/gi, "")
-            .replace(/url\s*\(/gi, "")
-            .replace(/<(link|style|script|iframe|object|embed)\b[^>]*>/gi, "")
-    }
     function showPage(p, position) {
         // the same page again at the page the reader is on (new margins or
         // images): stay exactly where the reader is
-        const same = view === "page" && pageData && pageData.url === p.url && pageHtml !== "" && position === pageIndex
-        let keep = -1
-        if (same) { recordTop(); keep = topCharPos }
+        const same = view === "page" && pageData && pageData.url === p.url && reader.pageHtml !== "" && position === pageIndex
         pageData = p
-        pendingPosition = same ? -1 : position
-        topCharPos = keep
-        pageIndex = 0
-        pageStarts = [0]
-        pageHeights = [readerArea.height]
         headingPages = []
-        // Qt's TextEdit doesn't redraw correctly when its rich text is
-        // replaced in place (parts of the new page stay blank, old images
-        // linger). Clearing it first and setting the new text a moment
-        // later is reliable.
-        pageHtml = ""
-        nextHtml = pageHeader(p) + restyle(safeHtml(p.html))
-        setTextTimer.restart()
         view = "page"
+        reader.setContent(pageHeader(p) + p.html, same ? { keep: true } : { page: position })
         menuOpen = false
         if (panel !== "settings") closePanel()
-        schedulePaginate()
     }
 
     // title and meta line above the article (the backend's PDF builds the
@@ -536,53 +419,12 @@ Rectangle {
         if (!p.reader) meta.push("simplified page")
         return "<h1>" + esc(p.title) + "</h1><p><small>" + meta.join(" · ") + "</small></p>"
     }
-    property string nextHtml: ""
-    Timer {
-        id: setTextTimer
-        interval: 30
-        onTriggered: { pageHtml = nextHtml; nextHtml = ""; schedulePaginate() }
-    }
-    Timer { id: paginateTimer; interval: 60; onTriggered: paginate() }
-    function schedulePaginate() { if (view === "page") paginateTimer.restart() }
+    function safeHtml(h) { return reader.safeHtml(h) }
+    function pageOfY(y, starts) { return reader.pageOfY(y, starts) }
+    function goToPage(i) { reader.goToPage(i) }
+    function nextPage() { reader.nextPage() }
+    function prevPage() { reader.prevPage() }
 
-    // Splits the laid-out text into screen pages. A page ends where the
-    // next one starts; a line (or image) that would be cut by the bottom
-    // edge moves to the next page instead.
-    function paginate() {
-        if (view !== "page" || pageHtml === "" || readerArea.height < 100) return
-        const H = Math.floor(readerArea.height)
-        const total = te.contentHeight
-        if (total < 10) return   // not laid out yet
-        const starts = [0], heights = []
-        let t = 0
-        for (let guard = 0; guard < 10000; guard++) {
-            const b = t + H
-            if (b >= total - 1) { heights.push(Math.max(1, Math.ceil(total - t))); break }
-            let next = b
-            const r = te.positionToRectangle(te.positionAt(4, b))
-            if (r.y < b && r.y + r.height > b && r.y > t + 1) next = Math.floor(r.y)
-            heights.push(next - t)
-            starts.push(next)
-            t = next
-        }
-        let target = 0
-        if (pendingPosition >= 0) { target = pendingPosition; pendingPosition = -1 }
-        else if (topCharPos >= 0) target = pageOfY(te.positionToRectangle(topCharPos).y, starts)
-        pageStarts = starts
-        pageHeights = heights
-        pageIndex = spreadStart(Math.max(0, Math.min(target, starts.length - 1)))
-        computeHeadingPages()
-        recordTop()
-    }
-    function pageOfY(y, starts) {
-        const s = starts || pageStarts
-        let i = 0
-        while (i + 1 < s.length && s[i + 1] <= y + 1) i++
-        return i
-    }
-    function recordTop() {
-        topCharPos = te.positionAt(4, pageStarts[pageIndex] + 2)
-    }
     // Finds each heading in the laid-out text to know its page.
     function computeHeadingPages() {
         const res = []
@@ -593,42 +435,9 @@ Rectangle {
             const i = txt.indexOf(h.text, from)
             if (i < 0) { res.push(-1); continue }
             from = i + h.text.length
-            res.push(pageOfY(te.positionToRectangle(i).y))
+            res.push(reader.pageOfY(te.positionToRectangle(i).y))
         }
         headingPages = res
-    }
-    function spreadStart(i) { return spread ? i - i % 2 : i }
-    function goToPage(i) {
-        const n = spreadStart(Math.max(0, Math.min(i, pageCount - 1)))
-        if (n === pageIndex) return
-        pageIndex = n
-        recordTop()
-        send(reqPosition, { page: n })
-    }
-    function nextPage() { goToPage(pageIndex + pageStep) }
-    function prevPage() { goToPage(pageIndex - pageStep) }
-    readonly property bool lastSpread: pageIndex + pageStep >= pageCount
-    // "3 / 20", or "3–4 / 20" with two pages on screen
-    readonly property string pagesShown: (pageIndex + 1) + (spread && pageIndex + 1 < pageCount ? "\u2013" + (pageIndex + 2) : "")
-
-    // The link under a finger: also look a little around the touch point,
-    // fingers are not as exact as a mouse.
-    // With two pages on screen, the right half belongs to the right page.
-    function linkAt(item, x, y) {
-        const right = spread && rightPage.item && item.mapToItem(root, x, y).x > readerArea.x + readerArea.width + gutter / 2
-        const t = right ? rightPage.item.textEdit : te
-        const i = pageIndex + (right ? 1 : 0)
-        if (i >= pageCount) return ""
-        const pt = item.mapToItem(t, x, y)
-        const top = pageStarts[i], bottom = top + pageHeights[i]
-        const offsets = [[0, 0], [0, -14], [0, 14], [-14, 0], [14, 0]]
-        for (const o of offsets) {
-            const ty = pt.y + o[1]
-            if (ty < top || ty > bottom) continue
-            const l = t.linkAt(pt.x + o[0], ty)
-            if (l) return l
-        }
-        return ""
     }
 
     // ------------------------------------------------------------ address bar
@@ -662,254 +471,21 @@ Rectangle {
     }
     onAppStateChanged: if (panel === "entry") updateEntryModel()
 
-    // ------------------------------------------------------------ widgets
-    component EButton: Rectangle {
-        id: btn
-        property alias text: lbl.text
-        property bool active: false
-        property int fontSize: 28
-        property string fontFamily: ""
-        signal clicked
-        implicitWidth: Math.max(100, lbl.implicitWidth + 36)
-        implicitHeight: 68
-        color: active ? "black" : "white"
-        border.color: "black"; border.width: 3; radius: 8
-        opacity: enabled ? 1 : 0.3
-        Text { id: lbl; anchors.centerIn: parent; font.pixelSize: btn.fontSize; font.family: btn.fontFamily || "Noto Sans"; color: btn.active ? "white" : "black" }
-        MouseArea { anchors.fill: parent; onClicked: btn.clicked() }
-    }
-
-    // A list shown page by page (no scrolling): as many rows as fit, with
-    // buttons to turn the page. Swiping left/right turns it too.
-    component PagedList: ColumnLayout {
-        id: pl
-        property var items: []
-        property int rowHeight: 90
-        property Component rowDelegate
-        property int page: 0
-        property int pendingPage: -1
-        property bool moreAvailable: false
-        property string emptyText: ""
-        signal moreRequested
-        signal pageTurned(int page)
-        spacing: 8
-        readonly property int perPage: Math.max(1, Math.floor(listArea.height / rowHeight))
-        readonly property int pages: Math.max(1, Math.ceil(items.length / perPage))
-        onPagesChanged: if (page > pages - 1) page = pages - 1
-        function applyPending() {
-            if (pendingPage >= 0 && listArea.height > 0) {
-                page = Math.min(pendingPage, pages - 1)
-                pendingPage = -1
-            }
-        }
-        function turn(d) {
-            const n = page + d
-            if (n >= 0 && n < pages) { page = n; pageTurned(n) }
-            else if (n >= pages && moreAvailable) moreRequested()
-        }
-        Item {
-            id: listArea
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            clip: true
-            onHeightChanged: pl.applyPending()
-            Column {
-                width: parent.width
-                Repeater {
-                    model: pl.items.slice(pl.page * pl.perPage, (pl.page + 1) * pl.perPage)
-                    delegate: pl.rowDelegate
-                }
-            }
-            Text {
-                visible: pl.items.length === 0 && pl.emptyText !== ""
-                text: pl.emptyText
-                width: parent.width
-                wrapMode: Text.Wrap
-                font.pixelSize: 26; color: "#444"
-            }
-            // swipe to turn; a tap goes to the row under it (row.tapped()).
-            // Never propagateComposedEvents here: Qt hands the click on to
-            // every MouseArea under the finger in the whole window, which
-            // includes xochitl's behind the app (AppLoad's list of apps, the
-            // library): a tap on a row also launched an app or a notebook.
-            MouseArea {
-                anchors.fill: parent
-                property real px: 0
-                property real py: 0
-                onPressed: (m) => { px = m.x; py = m.y; m.accepted = true }
-                onReleased: (m) => {
-                    const dx = m.x - px, dy = m.y - py
-                    if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy)) { pl.turn(dx < 0 ? 1 : -1); return }
-                    if (Math.abs(dx) > 30 || Math.abs(dy) > 30) return
-                    const col = listArea.children[0]
-                    const p = mapToItem(col, m.x, m.y)
-                    const row = col.childAt(p.x, p.y)
-                    if (row && typeof row.tapped === "function") row.tapped()
-                }
-            }
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            visible: pl.pages > 1 || pl.moreAvailable
-            spacing: 12
-            EButton { text: "‹ Previous"; enabled: pl.page > 0; onClicked: pl.turn(-1) }
-            Text {
-                Layout.fillWidth: true
-                horizontalAlignment: Text.AlignHCenter
-                text: (pl.page + 1) + " / " + pl.pages + (pl.moreAvailable ? "+" : "")
-                font.pixelSize: 26
-            }
-            EButton {
-                text: pl.page < pl.pages - 1 || !pl.moreAvailable ? "Next ›" : "More results ›"
-                enabled: pl.page < pl.pages - 1 || pl.moreAvailable
-                onClicked: pl.turn(1)
-            }
-        }
-    }
-
-    component Field: Rectangle {
-        id: fld
-        property string text: ""
-        property string placeholder: ""
-        signal clicked
-        implicitHeight: 80
-        Layout.fillWidth: true
-        border.color: "black"; border.width: 3; radius: 10
-        Text {
-            anchors.fill: parent; anchors.leftMargin: 20; anchors.rightMargin: 20
-            verticalAlignment: Text.AlignVCenter
-            text: fld.text !== "" ? fld.text : fld.placeholder
-            color: fld.text !== "" ? "black" : "#666"
-            font.pixelSize: 28
-            elide: Text.ElideRight
-        }
-        MouseArea { anchors.fill: parent; onClicked: fld.clicked() }
-    }
-
     // ------------------------------------------------------------ reader view
-    // Where the article is drawn (also measured while hidden: the backend
-    // sizes images to fit it).
-    // In landscape this is the left page; the right one is laid out the same.
-    Item {
-        id: readerArea
-        objectName: "readerArea"
-        anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
-        anchors.leftMargin: sideMargin
-        anchors.topMargin: 48; anchors.bottomMargin: 76
-        width: spread ? Math.floor((parent.width - 2 * sideMargin - gutter) / 2) : parent.width - 2 * sideMargin
-        visible: view === "page"
-        onHeightChanged: { schedulePaginate(); viewportTimer.restart() }
-        onWidthChanged: viewportTimer.restart()
-
-        // A Flickable (not interactive: pages are turned by taps) shows one
-        // page of the text. Moving the TextEdit inside a plain clipped item
-        // does not work: TextEdit only draws the blocks in its viewport and
-        // only notices viewport changes made through a Flickable.
-        Flickable {
-            id: clipBox
-            width: parent.width
-            height: pageHeights[pageIndex] || parent.height
-            clip: true
-            interactive: false
-            contentWidth: width
-            contentHeight: te.contentHeight
-            contentY: pageStarts[pageIndex] || 0
-            TextEdit {
-                id: te
-                objectName: "te"
-                width: readerArea.width
-                readOnly: true
-                selectByMouse: false
-                activeFocusOnPress: false
-                textFormat: TextEdit.RichText
-                wrapMode: TextEdit.Wrap
-                color: "black"
-                font.pixelSize: fontSize
-                font.family: familyOf(settings.font)
-                text: pageHtml
-                onContentHeightChanged: schedulePaginate()
-                onWidthChanged: schedulePaginate()
-                onFontChanged: schedulePaginate()
-            }
-        }
-    }
-    // The right page of a spread: a second copy of the text with the same
-    // width and font (so the same layout), showing the next page. Only made
-    // in landscape.
-    Rectangle {   // fold between the pages
-        visible: view === "page" && spread
-        x: readerArea.x + readerArea.width + gutter / 2
-        y: readerArea.y; width: 1; height: readerArea.height
-        color: "#bbb"
-    }
-    Loader {
-        id: rightPage
-        objectName: "rightPage"
-        active: spread
-        visible: view === "page"
-        x: readerArea.x + readerArea.width + gutter
-        y: readerArea.y
-        // no size here: a Loader with a size forces it on the page, and the
-        // page's height must end above a line that doesn't fit
-        sourceComponent: Flickable {
-            readonly property alias textEdit: te2
-            readonly property int index: pageIndex + 1
-            visible: index < pageCount
-            width: readerArea.width
-            height: pageHeights[index] || 0
-            clip: true
-            interactive: false
-            contentWidth: width
-            contentHeight: te2.contentHeight
-            contentY: pageStarts[index] || 0
-            TextEdit {
-                id: te2
-                objectName: "te2"
-                width: readerArea.width
-                readOnly: true
-                selectByMouse: false
-                activeFocusOnPress: false
-                textFormat: TextEdit.RichText
-                wrapMode: TextEdit.Wrap
-                color: "black"
-                font.pixelSize: fontSize
-                font.family: familyOf(settings.font)
-                text: pageHtml
-            }
-        }
-    }
-    Timer {
-        id: viewportTimer
-        interval: 500
-        onTriggered: if (!initTimer.running) send(reqViewport, viewport())
-    }
-
-    // taps and swipes on the page: left third back, right third forward,
-    // middle opens the menu; links win over page turns
-    MouseArea {
+    // The article page by page (app/shared/ReaderView.qml); also measured
+    // while hidden: the backend sizes images to fit it.
+    ReaderView {
+        id: reader
         anchors.fill: parent
-        visible: view === "page" && !menuOpen && panel === ""
-        property real px: 0
-        property real py: 0
-        onPressed: (m) => { px = m.x; py = m.y }
-        onReleased: (m) => {
-            const dx = m.x - px, dy = m.y - py
-            if (Math.abs(dx) > 80 && Math.abs(dx) > Math.abs(dy)) { if (dx < 0) nextPage(); else prevPage(); return }
-            if (Math.abs(dx) > 30 || Math.abs(dy) > 30) return
-            const link = linkAt(this, m.x, m.y)
-            if (link) { openLink(link); return }
-            if (m.x < width / 3) prevPage()
-            else if (m.x > width * 2 / 3) nextPage()
-            else menuOpen = true
-        }
-    }
-
-    Text {   // page number
-        visible: view === "page"
-        anchors.bottom: parent.bottom; anchors.bottomMargin: 22
-        anchors.horizontalCenter: parent.horizontalCenter
-        text: pagesShown + " / " + pageCount
-        font.pixelSize: 22; color: "#555"
+        settings: root.settings
+        imageDir: appState.imageDir || ""
+        active: view === "page"
+        interactive: view === "page" && !menuOpen && panel === ""
+        onMenuRequested: menuOpen = true
+        onLinkClicked: (href) => openLink(href)
+        onPageTurned: (n) => send(reqPosition, { page: n })
+        onLaidOut: computeHeadingPages()
+        onViewportSettled: if (!initTimer.running) send(reqViewport, reader.viewport())
     }
 
     // ------------------------------------------------------------ home view
@@ -922,7 +498,7 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             spacing: 12
-            Text { text: "Browser"; font.pixelSize: 46; font.bold: true; Layout.fillWidth: true }
+            Text { color: Theme.ink; text: "Browser"; font.pixelSize: 46; font.bold: true; Layout.fillWidth: true }
             EButton { text: "Settings"; onClicked: panel = "settings" }
             EButton { text: "Close"; onClicked: closeApp() }
         }
@@ -932,7 +508,7 @@ Rectangle {
             visible: !!appState.canForward
             EButton { text: "Forward ›"; onClicked: send(reqForward) }
         }
-        Text {
+        Text { color: Theme.ink;
             text: "Recent"
             visible: (appState.history || []).length > 0
             font.pixelSize: 30; font.bold: true
@@ -952,7 +528,7 @@ Rectangle {
                     anchors.left: parent.left; anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 4
-                    Text {
+                    Text { color: Theme.ink;
                         width: parent.width
                         text: modelData.query ? "Search: " + modelData.query : (modelData.title || modelData.url)
                         font.pixelSize: 28; elide: Text.ElideRight
@@ -960,10 +536,10 @@ Rectangle {
                     Text {
                         width: parent.width
                         text: modelData.query ? "DuckDuckGo" : hostOf(modelData.url)
-                        font.pixelSize: 22; color: "#555"; elide: Text.ElideRight
+                        font.pixelSize: 22; color: Theme.dim; elide: Text.ElideRight
                     }
                 }
-                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#999" }
+                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
             }
         }
         EButton {
@@ -1009,21 +585,21 @@ Rectangle {
                     anchors.left: parent.left; anchors.right: parent.right
                     anchors.top: parent.top; anchors.topMargin: 14
                     spacing: 6
-                    Text {
+                    Text { color: Theme.ink;
                         width: parent.width
                         text: modelData.title
                         font.pixelSize: 29; font.bold: true
                         wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                     }
-                    Text { width: parent.width; text: modelData.host || ""; font.pixelSize: 22; color: "#444"; elide: Text.ElideRight }
-                    Text {
+                    Text { width: parent.width; text: modelData.host || ""; font.pixelSize: 22; color: Theme.dim; elide: Text.ElideRight }
+                    Text { color: Theme.ink;
                         width: parent.width
                         text: modelData.snippet
                         font.pixelSize: 23
                         wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight
                     }
                 }
-                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#999" }
+                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
             }
         }
     }
@@ -1034,8 +610,8 @@ Rectangle {
         anchors.centerIn: parent
         width: parent.width - 120
         spacing: 24
-        Text { text: "The page could not be loaded"; font.pixelSize: 36; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
-        Text { text: errorText; font.pixelSize: 28; Layout.fillWidth: true; wrapMode: Text.Wrap }
+        Text { color: Theme.ink; text: "The page could not be loaded"; font.pixelSize: 36; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
+        Text { color: Theme.ink; text: errorText; font.pixelSize: 28; Layout.fillWidth: true; wrapMode: Text.Wrap }
         RowLayout {
             spacing: 16
             EButton { text: "Try again"; visible: errorRetry; onClicked: send(reqReload) }
@@ -1056,8 +632,8 @@ Rectangle {
         visible: menuOpen
         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
         height: menuCol.implicitHeight + 48
-        color: "white"
-        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 3; color: "black" }
+        color: Theme.paper
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 3; color: Theme.ink }
         MouseArea { anchors.fill: parent }   // don't close when tapping between buttons
         ColumnLayout {
             id: menuCol
@@ -1099,8 +675,8 @@ Rectangle {
         visible: menuOpen && view === "page"
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
         height: 120
-        color: "white"
-        Rectangle { anchors.top: parent.top; width: parent.width; height: 3; color: "black" }
+        color: Theme.paper
+        Rectangle { anchors.top: parent.top; width: parent.width; height: 3; color: Theme.ink }
         MouseArea { anchors.fill: parent }
         RowLayout {
             anchors.fill: parent
@@ -1110,7 +686,7 @@ Rectangle {
             Slider {
                 id: pageSlider
                 Layout.fillWidth: true
-                from: 0; to: Math.max(1, spreadStart(pageCount - 1)); stepSize: pageStep
+                from: 0; to: Math.max(1, reader.spreadStart(pageCount - 1)); stepSize: reader.pageStep
                 snapMode: Slider.SnapAlways
                 enabled: pageCount > 1
                 value: pageIndex
@@ -1119,17 +695,17 @@ Rectangle {
                     x: pageSlider.leftPadding
                     y: pageSlider.topPadding + pageSlider.availableHeight / 2 - height / 2
                     width: pageSlider.availableWidth; height: 6
-                    color: "black"
+                    color: Theme.ink
                 }
                 handle: Rectangle {   // big enough for a finger
                     x: pageSlider.leftPadding + pageSlider.visualPosition * (pageSlider.availableWidth - width)
                     y: pageSlider.topPadding + pageSlider.availableHeight / 2 - height / 2
                     width: 44; height: 64; radius: 8
-                    color: "white"; border.color: "black"; border.width: 4
+                    color: Theme.paper; border.color: Theme.ink; border.width: 4
                 }
             }
-            Text { text: (spread && pageIndex + 1 < pageCount ? "Pages " : "Page ") + pagesShown + " of " + pageCount; font.pixelSize: 26 }
-            EButton { text: "›"; fontSize: 40; enabled: !lastSpread; onClicked: nextPage() }
+            Text { color: Theme.ink; text: (spread && pageIndex + 1 < pageCount ? "Pages " : "Page ") + reader.pagesShown + " of " + pageCount; font.pixelSize: 26 }
+            EButton { text: "›"; fontSize: 40; enabled: !reader.lastSpread; onClicked: nextPage() }
         }
     }
 
@@ -1137,7 +713,7 @@ Rectangle {
     Rectangle {
         visible: panel === "entry"
         anchors.fill: parent
-        color: "white"
+        color: Theme.paper
         MouseArea { anchors.fill: parent }
         ColumnLayout {
             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
@@ -1147,13 +723,15 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: 12
                 TextField {
+                    color: Theme.ink
+                    placeholderTextColor: Theme.dim
                     id: entryField
                     Layout.fillWidth: true
                     implicitHeight: 80
                     font.pixelSize: 30
                     placeholderText: "Search DuckDuckGo or type an address"
                     inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText | Qt.ImhUrlCharactersOnly
-                    background: Rectangle { border.color: "black"; border.width: 3; radius: 10 }
+                    background: Rectangle { color: Theme.paper; border.color: Theme.ink; border.width: 3; radius: 10 }
                     onTextEdited: { updateEntryModel(); suggestTimer.restart() }
                     onAccepted: openInput(text)
                 }
@@ -1170,7 +748,7 @@ Rectangle {
                         anchors.left: parent.left; anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 2
-                        Text {
+                        Text { color: Theme.ink;
                             width: parent.width
                             text: modelData.kind === "suggest" ? modelData.label : modelData.label
                             font.pixelSize: 29
@@ -1181,10 +759,10 @@ Rectangle {
                             width: parent.width
                             visible: modelData.sub !== ""
                             text: modelData.sub
-                            font.pixelSize: 21; color: "#555"; elide: Text.ElideRight
+                            font.pixelSize: 21; color: Theme.dim; elide: Text.ElideRight
                         }
                     }
-                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#999" }
+                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
                     MouseArea { anchors.fill: parent; onClicked: openInput(modelData.value) }
                 }
             }
@@ -1197,7 +775,7 @@ Rectangle {
     Rectangle {
         visible: panel === "contents"
         anchors.fill: parent
-        color: "white"
+        color: Theme.paper
         MouseArea { anchors.fill: parent }
         ColumnLayout {
             anchors.fill: parent
@@ -1206,7 +784,7 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 12
-                Text { text: "Contents"; font.pixelSize: 42; font.bold: true; Layout.fillWidth: true }
+                Text { color: Theme.ink; text: "Contents"; font.pixelSize: 42; font.bold: true; Layout.fillWidth: true }
                 EButton { text: "×"; fontSize: 40; onClicked: closePanel() }
             }
             RowLayout {
@@ -1221,7 +799,7 @@ Rectangle {
             Text {
                 Layout.fillWidth: true
                 text: pageData ? pageData.title : ""
-                font.pixelSize: 24; color: "#444"; elide: Text.ElideRight
+                font.pixelSize: 24; color: Theme.dim; elide: Text.ElideRight
             }
             PagedList {
                 id: tocList
@@ -1238,7 +816,7 @@ Rectangle {
                 }
                 readonly property int current: {
                     let c = 0
-                    for (let i = 0; i < items.length; i++) if (items[i].page >= 0 && items[i].page < pageIndex + pageStep) c = i
+                    for (let i = 0; i < items.length; i++) if (items[i].page >= 0 && items[i].page < pageIndex + reader.pageStep) c = i
                     return c
                 }
                 onVisibleChanged: if (visible) page = Math.floor(current / perPage)
@@ -1254,17 +832,17 @@ Rectangle {
                         text: modelData.text
                         font.pixelSize: modelData.level <= 2 ? 29 : 26
                         font.bold: tocList.items.indexOf(modelData) === tocList.current
-                        color: modelData.page >= 0 ? "black" : "#888"
+                        color: modelData.page >= 0 ? Theme.ink : Theme.dim
                         elide: Text.ElideRight
                     }
-                    Text {
+                    Text { color: Theme.ink;
                         id: pageNo
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData.page >= 0 ? String(modelData.page + 1) : ""
                         font.pixelSize: 26
                     }
-                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#bbb" }
+                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
                 }
             }
             PagedList {
@@ -1283,123 +861,28 @@ Rectangle {
                         anchors.left: parent.left; anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 2
-                        Text { width: parent.width; text: modelData.text; font.pixelSize: 28; elide: Text.ElideRight }
-                        Text { width: parent.width; text: modelData.url.replace(/^https?:\/\/(www\.)?/, ""); font.pixelSize: 20; color: "#555"; elide: Text.ElideRight }
+                        Text { color: Theme.ink; width: parent.width; text: modelData.text; font.pixelSize: 28; elide: Text.ElideRight }
+                        Text { width: parent.width; text: modelData.url.replace(/^https?:\/\/(www\.)?/, ""); font.pixelSize: 20; color: Theme.dim; elide: Text.ElideRight }
                     }
-                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#bbb" }
+                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
                 }
             }
         }
     }
 
     // ------------------------------------------------------------ font panel
-    // At the bottom, so the page above shows each change right away.
-    MouseArea {   // tap on the page above closes it
-        visible: panel === "font"
-        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-        anchors.bottom: fontPanel.top
-        onClicked: closePanel()
-    }
-    Rectangle {
-        id: fontPanel
-        objectName: "fontPanel"
-        visible: panel === "font"
-        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-        height: fontCol.implicitHeight + 56
-        color: "white"
-        Rectangle { anchors.top: parent.top; width: parent.width; height: 3; color: "black" }
-        MouseArea { anchors.fill: parent }
-        ColumnLayout {
-            id: fontCol
-            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-            anchors.margins: 28
-            spacing: 14
-            RowLayout {
-                Layout.fillWidth: true
-                Text { text: "Font and layout"; font.pixelSize: 36; font.bold: true; Layout.fillWidth: true }
-                EButton { text: "×"; fontSize: 40; onClicked: closePanel() }
-            }
-            // the typeface: one button showing the current one, opening the
-            // list (each name in its own face) in place of the other rows
-            RowLayout {
-                spacing: 12
-                visible: !fontListOpen
-                Text { text: "Font"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
-                EButton {
-                    objectName: "fontDropdown"
-                    Layout.fillWidth: true
-                    text: currentFont().label + "  \u25BE"
-                    fontFamily: currentFont().family
-                    onClicked: fontListOpen = true
-                }
-            }
-            Repeater {
-                model: fontListOpen ? fontGroups : []
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 10
-                    required property var modelData
-                    Text { text: modelData.title; font.pixelSize: 24; font.bold: true }
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2; columnSpacing: 12; rowSpacing: 12
-                        Repeater {
-                            model: fontChoices.filter(function (f) { return f.group === modelData.key })
-                            EButton {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                Layout.preferredWidth: 1
-                                text: modelData.label
-                                fontFamily: modelData.family
-                                fontSize: 30
-                                active: (settings.font || "sans") === modelData.key
-                                onClicked: { setSetting({ font: modelData.key }); fontListOpen = false }
-                            }
-                        }
-                    }
-                }
-            }
-            RowLayout {
-                spacing: 12
-                visible: !fontListOpen
-                Text { text: "Size"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
-                // root.fontSize: inside an EButton, fontSize is the button's own label size
-                EButton { text: "A\u2212"; fontSize: 24; enabled: root.fontSize > minFontSize; onClicked: setSetting({ fontSize: Math.max(minFontSize, root.fontSize - fontStep(false)) }) }
-                Text { text: root.fontSize + " px"; font.pixelSize: 26; Layout.preferredWidth: 100; horizontalAlignment: Text.AlignHCenter }
-                EButton { text: "A+"; fontSize: 32; enabled: root.fontSize < maxFontSize; onClicked: setSetting({ fontSize: Math.min(maxFontSize, root.fontSize + fontStep(true)) }) }
-            }
-            RowLayout {
-                spacing: 12
-                visible: !fontListOpen
-                Text { text: "Spacing"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
-                Repeater {
-                    model: [[100, "1.0"], [115, "1.15"], [125, "1.25"], [150, "1.5"], [175, "1.75"], [200, "2.0"]]
-                    EButton { text: modelData[1]; fontSize: 24; implicitWidth: 92; active: lineSpacing === modelData[0]; onClicked: setSetting({ lineSpacing: modelData[0] }) }
-                }
-            }
-            RowLayout {
-                spacing: 12
-                visible: !fontListOpen
-                Text { text: "Alignment"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
-                EButton { text: "Left"; active: !justified; onClicked: setSetting({ align: "left" }) }
-                EButton { text: "Justified"; active: justified; onClicked: setSetting({ align: "justify" }) }
-            }
-            RowLayout {
-                spacing: 12
-                visible: !fontListOpen
-                Text { text: "Margins"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
-                EButton { text: "Narrow"; active: settings.margin === "narrow"; onClicked: setSetting({ margin: "narrow" }) }
-                EButton { text: "Normal"; active: !settings.margin || settings.margin === "normal"; onClicked: setSetting({ margin: "normal" }) }
-                EButton { text: "Wide"; active: settings.margin === "wide"; onClicked: setSetting({ margin: "wide" }) }
-            }
-        }
+    FontPanel {
+        settings: root.settings
+        open: panel === "font"
+        onSetSetting: (obj) => root.setSetting(obj)
+        onCloseRequested: closePanel()
     }
 
     // ------------------------------------------------------------ settings panel
     Rectangle {
         visible: panel === "settings"
         anchors.fill: parent
-        color: "white"
+        color: Theme.paper
         MouseArea { anchors.fill: parent }
         ColumnLayout {
             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
@@ -1407,15 +890,15 @@ Rectangle {
             spacing: 22
             RowLayout {
                 Layout.fillWidth: true
-                Text { text: "Settings"; font.pixelSize: 42; font.bold: true; Layout.fillWidth: true }
+                Text { color: Theme.ink; text: "Settings"; font.pixelSize: 42; font.bold: true; Layout.fillWidth: true }
                 EButton { text: "×"; fontSize: 40; onClicked: closePanel() }
             }
-            Text { text: "Text"; font.pixelSize: 30; font.bold: true }
+            Text { color: Theme.ink; text: "Text"; font.pixelSize: 30; font.bold: true }
             EButton {
-                text: "Aa  Font and layout: " + currentFont().label + ", " + fontSize + " px"
+                text: "Aa  Font and layout: " + Fonts.find(settings.font).label + ", " + fontSize + " px"
                 onClicked: panel = "font"
             }
-            Text { text: "Images"; font.pixelSize: 30; font.bold: true }
+            Text { color: Theme.ink; text: "Images"; font.pixelSize: 30; font.bold: true }
             RowLayout {
                 spacing: 16
                 EButton { text: "Show"; active: !settings.noImages; onClicked: send(reqSettings, { noImages: false }) }
@@ -1423,31 +906,31 @@ Rectangle {
                 EButton { text: "Colour"; visible: !settings.noImages; active: !settings.greyImages; onClicked: send(reqSettings, { greyImages: false }) }
                 EButton { text: "Grey"; visible: !settings.noImages; active: !!settings.greyImages; onClicked: send(reqSettings, { greyImages: true }) }
             }
-            Text { text: "Safe search (DuckDuckGo)"; font.pixelSize: 30; font.bold: true }
+            Text { color: Theme.ink; text: "Safe search (DuckDuckGo)"; font.pixelSize: 30; font.bold: true }
             RowLayout {
                 spacing: 16
                 EButton { text: "Strict"; active: settings.safeSearch === "strict"; onClicked: send(reqSettings, { safeSearch: "strict" }) }
                 EButton { text: "Moderate"; active: settings.safeSearch === "moderate"; onClicked: send(reqSettings, { safeSearch: "moderate" }) }
                 EButton { text: "Off"; active: settings.safeSearch === "off"; onClicked: send(reqSettings, { safeSearch: "off" }) }
             }
-            Text { text: "Insecure pages (http://)"; font.pixelSize: 30; font.bold: true }
+            Text { color: Theme.ink; text: "Insecure pages (http://)"; font.pixelSize: 30; font.bold: true }
             RowLayout {
                 spacing: 16
                 EButton { text: "Block"; active: !settings.allowHTTP; onClicked: send(reqSettings, { allowHTTP: false }) }
                 EButton { text: "Allow"; active: !!settings.allowHTTP; onClicked: send(reqSettings, { allowHTTP: true }) }
             }
-            Text { text: "Privacy"; font.pixelSize: 30; font.bold: true }
+            Text { color: Theme.ink; text: "Privacy"; font.pixelSize: 30; font.bold: true }
             EButton { text: "Clear browsing data"; onClicked: panel = "confirm" }
             Text {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                font.pixelSize: 22; color: "#444"
+                font.pixelSize: 22; color: Theme.dim
                 text: "Cookies are kept in memory only, never on the tablet, and forgotten when you close the browser. "
                       + "Tracking pixels and ads are never downloaded. No JavaScript is ever run. "
                       + "Pages are loaded by a sandboxed helper ("
                       + (appState.sandbox || "starting") + ") that cannot start programs, see your notebooks or reach your local network."
             }
-            Text { text: "rm-browser " + (appState.version || ""); font.pixelSize: 22; color: "#444" }
+            Text { text: "rm-browser " + (appState.version || ""); font.pixelSize: 22; color: Theme.dim }
         }
     }
 
@@ -1461,16 +944,16 @@ Rectangle {
             anchors.centerIn: parent
             width: Math.min(parent.width - 80, 800)
             height: confirmCol.implicitHeight + 64
-            color: "white"
-            border.color: "black"; border.width: 4; radius: 12
+            color: Theme.paper
+            border.color: Theme.ink; border.width: 4; radius: 12
             MouseArea { anchors.fill: parent }
             ColumnLayout {
                 id: confirmCol
                 anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                 anchors.margins: 32
                 spacing: 24
-                Text { text: "Clear browsing data?"; font.pixelSize: 36; font.bold: true }
-                Text {
+                Text { color: Theme.ink; text: "Clear browsing data?"; font.pixelSize: 36; font.bold: true }
+                Text { color: Theme.ink;
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                     font.pixelSize: 26
@@ -1492,14 +975,14 @@ Rectangle {
         anchors.bottom: parent.bottom; anchors.bottomMargin: 140
         width: Math.min(parent.width - 80, busyRow.implicitWidth + 48)
         height: busyRow.implicitHeight + 32
-        color: "white"
-        border.color: "black"; border.width: 3; radius: 10
+        color: Theme.paper
+        border.color: Theme.ink; border.width: 3; radius: 10
         RowLayout {
             id: busyRow
             anchors.centerIn: parent
             width: parent.width - 48
             spacing: 20
-            Text { text: busyText; font.pixelSize: 26; elide: Text.ElideRight; Layout.fillWidth: true }
+            Text { color: Theme.ink; text: busyText; font.pixelSize: 26; elide: Text.ElideRight; Layout.fillWidth: true }
             EButton { text: "Stop"; onClicked: send(reqCancel) }
         }
     }
@@ -1509,12 +992,12 @@ Rectangle {
         anchors.bottom: parent.bottom; anchors.bottomMargin: 140
         width: Math.min(parent.width - 80, toastText.implicitWidth + 48)
         height: toastText.implicitHeight + 32
-        color: "black"; radius: 10
+        color: Theme.ink; radius: 10
         Text {
             id: toastText
             anchors.centerIn: parent
             width: Math.min(implicitWidth, root.width - 128)
-            text: toast; color: "white"; font.pixelSize: 26; wrapMode: Text.Wrap
+            text: toast; color: Theme.paper; font.pixelSize: 26; wrapMode: Text.Wrap
         }
         MouseArea { anchors.fill: parent; onClicked: toast = "" }
     }
@@ -1523,13 +1006,13 @@ Rectangle {
     Rectangle {
         visible: exportStatus !== ""
         anchors.fill: parent
-        color: "white"
+        color: Theme.paper
         MouseArea { anchors.fill: parent }   // nothing underneath reacts while saving
         ColumnLayout {
             anchors.centerIn: parent
             width: parent.width - 120
             spacing: 40
-            Text {
+            Text { color: Theme.ink;
                 Layout.fillWidth: true
                 text: exportStatus
                 wrapMode: Text.Wrap

@@ -1,5 +1,13 @@
 # rm-browser
 
+Two [AppLoad](https://github.com/asivery/rm-appload) apps for reMarkable tablets that share one
+reader (pages you turn, two pages side by side in landscape, the same font panel):
+
+- **Browser** (`rm-browser`): a distraction-free web browser in reader view, below
+- **Books** (`rm-books`): an EPUB reader for the books in your library folder "Library", with
+  KOReader progress sync, see [Books](#books)
+
+
 An [AppLoad](https://github.com/asivery/rm-appload) app for reMarkable tablets: a
 **distraction-free web browser** that shows every page in **reader view**, split into
 **pages you turn** like a book, with **DuckDuckGo** search and autocomplete.
@@ -42,6 +50,35 @@ An [AppLoad](https://github.com/asivery/rm-appload) app for reMarkable tablets: 
 - Images in colour (for the Paper Pro's colour screen) or grey scale (Settings), sized to fit
   the screen; e-ink-friendly UI (black/white,
   no animations, large touch targets); always full screen
+
+## Books
+
+**Books** reads the EPUBs in the reMarkable library folder **"Library"** (and its subfolders), the
+ones you add with the reMarkable app, by e-mail or by USB. Nothing is copied: it reads them
+where the tablet keeps them, and never changes them. PDFs are not shown.
+
+- **The same reader as the browser:** pages you turn (tap right/left or swipe), no line or picture
+  cut at the bottom, two pages side by side in landscape, the same **Font and layout** panel
+  (12 typefaces, size, line spacing, left/justified, margins) plus **paragraphs indented** like a
+  printed book or spaced. **Book defaults**: Literata 34 px, justified, indented paragraphs;
+  *Defaults* in the panel goes back to them
+- Chapters follow each other: past the last page of a chapter comes the next one. **Contents**
+  (the book's own table of contents, with the share of the book where each entry starts), links
+  inside the book (footnotes) with **‹ Back**, page slider, chapter and percentage in the menu
+- The library list shows author, subfolder and how far you are; books you read come first. The
+  book open when you closed the app opens again at your page
+- Pictures are converted like the browser's (colour or grey, sized for the screen, or hidden)
+- **KOReader progress sync** ([kosync](https://github.com/koreader/koreader-sync-server)): the
+  reading position is shared with KOReader on other devices, the built-in EPUB reader (with
+  [kosync-native-reader](https://github.com/method-marco/remarkable-mods)), Readest and other
+  kosync apps. Books are matched as KOReader matches them (partial MD5 of the file) and positions
+  are KOReader's own (xpointers into the EPUB), so every app lands on the same sentence.
+  Opening a book jumps to a newer position from another device (unless you already turned
+  pages, then it only says so); turning pages and closing the book send yours. *Sync* in the
+  menu does it by hand. Log in under Settings, or nothing to do if kosync-native-reader is set up:
+  Books takes over its login once. Only the MD5 key of the password is stored, as KOReader does
+- Sandboxed like the browser: its backend can read the library (a read-only handle opened before
+  the sandbox), its own two folders and talk to the sync server, nothing else
 
 ## Security
 
@@ -156,6 +193,9 @@ Then reload AppLoad. The app shows up as **Browser**.
 | `/home/root/.cache/rm-browser/` | converted images (at most 150 MB) |
 | `/run/rm-browser-export/` | Save as PDF: the PDF while it is being saved (RAM only) |
 | `/home/root/.cache/rm-browser-jail/` | the sandbox's empty root folder (DNS settings only) |
+| `/home/root/.config/rm-books/config.json` | Books: settings, reading position per book, sync login (user, MD5 key) |
+| `/home/root/.cache/rm-books/` | Books: converted pictures (at most 150 MB) |
+| `/home/root/.cache/rm-books-jail/` | Books: the sandbox's empty root folder |
 
 Both folders belong to user `nobody` (the sandbox). Cookies are never written to disk.
 
@@ -164,10 +204,11 @@ Both folders belong to user `nobody` (the sandbox). Cookies are never written to
 Needs Go ≥ 1.26 and Qt 6's `rcc`, or just Docker:
 
 ```sh
-make docker            # builds dist/*.tar.gz and runs the tests in a container
+make docker            # builds dist/*.tar.gz (both apps) and runs the tests in a container
 make test              # backend unit tests, incl. a test that the sandbox really blocks things
 make qmltest           # frontend tests: headless Qt in Docker with simulated taps and swipes
-make install ARCH=aarch64 HOST=10.11.99.1   # build and copy to a device over SSH
+make install ARCH=aarch64 HOST=10.11.99.1   # build and copy both apps to a device over SSH
+make install APPS=rm-books                   # ... or one of them
 
 # check against real sites (DuckDuckGo, Wikipedia, macrumors, engadget, cyclingweekly, road.cc):
 cd backend && RM_BROWSER_LIVE=1 go test -run 'Live|Sites' -v ./...
@@ -179,23 +220,44 @@ RM_BROWSER_LIVE=1 RM_BROWSER_FIXTURE=$PWD/../build/fixture go test -run Sites ./
 
 ```
 app/
-  manifest.json        AppLoad manifest (id "rm-browser", loadsBackend)
-  ui/main.qml          frontend: reader with pagination, search results, address bar, contents
-  icon.png             generated by scripts/make_icon.py
-backend/               Go backend -> backend/entry (static, no cgo)
-  appload.go           AppLoad socket protocol
-  sandbox_linux.go     privilege drop, Landlock, seccomp
-  store.go             config and cache folders (os.Root)
-  fetch.go             HTTP client, HTTPS-only, address-or-search detection
-  trackers.go          tracking pixel and ad image filter
-  ddg.go               DuckDuckGo search and autocomplete
-  reader.go            Readability + bluemonday + Qt rich text writer
-  images.go            image download, re-encoding, resizing, optional grey scale
-  export.go            Save as PDF: the reader's layout -> text PDF (fpdf), export folder
-  fonts/               the reader's typefaces for the PDF (SIL OFL, see OFL-*.txt)
-  main.go              messages, history, back/forward, clearing data
-tests/qml/             headless frontend tests (stub AppLoad module, Dockerfile)
-packaging/vellum/reader-browser/VELBUILD
+  shared/              shared by both apps (imported as "../shared")
+    ReaderView.qml     the reader: pagination, landscape spreads, taps and swipes, positions
+    FontPanel.qml      Font and layout
+    fonts.js           the typefaces (keys, families, files)
+    EButton.qml Field.qml PagedList.qml FullScreen.qml
+  fonts/               bundled typefaces (SIL OFL), in both apps
+  browser/             Browser: main.qml (search, address bar, contents, Save as PDF),
+                       manifest.json (id "rm-browser"), icon.png (scripts/make_icon.py)
+  books/               Books: main.qml (library, chapters, contents, sync login),
+                       manifest.json (id "rm-books"), icon.png (scripts/make_books_icon.py)
+  browser.qrc books.qrc   Qt resources of each app
+backend/               Go -> one static binary per app (no cgo)
+  internal/            shared by both backends
+    appload/           AppLoad socket protocol
+    sandbox/           privilege drop, chroot, Landlock, seccomp allowlist
+    store/             config and cache folders (os.Root)
+    imaging/           picture decoding, re-encoding, resizing, grey scale
+    livedns/           DNS that follows the tablet's network inside the sandbox
+    typography/        the Font panel's settings, checked the same way in both apps
+  *.go                 the Browser backend:
+    fetch.go           HTTP client, HTTPS-only, address-or-search detection
+    trackers.go        tracking pixel and ad image filter
+    ddg.go             DuckDuckGo search and autocomplete
+    reader.go          Readability + bluemonday + Qt rich text writer
+    images.go          image download (conversion: internal/imaging)
+    export.go          Save as PDF: the reader's layout -> text PDF (fpdf), export folder
+    fonts/             the reader's typefaces for the PDF (SIL OFL, see OFL-*.txt)
+    main.go            messages, history, back/forward, clearing data
+  books/               the Books backend:
+    library.go         the folder "Library" in xochitl's documents
+    epub.go            EPUB parsing into KOReader's (crengine's) DOM, xpointers, table of
+                       contents (from kosync-native-reader's bridge)
+    render.go          chapter -> Qt rich text, with each visible character's source position
+    book.go            percentages, xpointer <-> reader position
+    kosync.go          the sync server client, KOReader's document digest
+    main.go            messages, reading positions, automatic sync
+tests/qml/             headless frontend tests of both apps (stub AppLoad module, Dockerfiles)
+packaging/vellum/      reader-browser/VELBUILD, reader-books/VELBUILD
 ```
 
 ## License

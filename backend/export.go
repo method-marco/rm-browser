@@ -37,6 +37,7 @@ import (
 	"unicode/utf8"
 
 	"codeberg.org/go-pdf/fpdf"
+	"github.com/method-marco/rm-browser/backend/internal/typography"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
@@ -170,7 +171,7 @@ type ExportRequest struct {
 	Name        string    `json:"name"` // document name, also the file name
 	URL         string    `json:"url"`
 	FontSize    float64   `json:"fontSize"`
-	Font        string    `json:"font"`      // see pdfFonts
+	Font        string    `json:"font"`      // see pdfFonts (= typography.Fonts)
 	Justify     bool      `json:"justify"`   // paragraphs are justified
 	AreaWidth   float64   `json:"areaWidth"` // width of the reader area (the text column)
 	Width       float64   `json:"width"`     // screen size: the PDF page
@@ -190,7 +191,7 @@ func (r *ExportRequest) check() error {
 		return errors.New("bad page size")
 	case r.FontSize < 10 || r.FontSize > 100:
 		return errors.New("bad font size")
-	case r.Font != "" && !validFont[r.Font]:
+	case r.Font != "" && !typography.Valid(r.Font):
 		return errors.New("unknown font")
 	case r.AreaWidth < 0 || r.AreaWidth > r.Width:
 		return errors.New("bad text width")
@@ -445,14 +446,6 @@ var pdfFonts = map[string]struct {
 	"bitter":       {"Bitter", [4]string{"Bitter-Regular", "Bitter-Bold", "Bitter-Italic", "Bitter-BoldItalic"}, fontMetrics{0.935, 0.265}},
 	"plexmono":     {"IBMPlexMono", [4]string{"IBMPlexMono-Regular", "IBMPlexMono-Bold", "IBMPlexMono-Italic", "IBMPlexMono-BoldItalic"}, fontMetrics{1.025, 0.275}},
 }
-
-var validFont = func() map[string]bool {
-	m := map[string]bool{}
-	for k := range pdfFonts {
-		m[k] = true
-	}
-	return m
-}()
 
 var pdfCompress = true
 

@@ -1,14 +1,17 @@
-package main
+// Package sandbox locks an app backend in before it handles untrusted
+// data (web pages, EPUB files). Shared by the apps in this repository.
+package sandbox
 
-// The backend is the only part of the browser that talks to the network
+// The backend is the only part of an app that talks to the network
 // and handles untrusted data, so it locks itself in before loading
 // anything. AppLoad starts it as root; then, in this order:
 //
 //  1. Its two data folders are handed to the user nobody, and handles to
 //     them are kept (os.Root, see store.go): from then on they are the
 //     only way to its files.
-//  2. Landlock (if the kernel has it): file access only to the jail and
-//     the data folders; network only outgoing to web ports and DNS; no
+//  2. Landlock (if the kernel has it): file access only to the jail, the
+//     data folders and read-only folders the app names (the library);
+//     network only outgoing to the app's ports and DNS; no
 //     signals to or abstract sockets of processes outside the sandbox.
 //  3. chroot into an empty jail folder that holds nothing but copies of
 //     resolv.conf and hosts (for DNS). The rest of the tablet's files no
@@ -44,9 +47,21 @@ import (
 
 const sandboxUID = 65534 // nobody
 
-// useLandlock: tests turn it off to check the other layers alone, as on
+// UseLandlock: tests turn it off to check the other layers alone, as on
 // kernels without Landlock (the reMarkable Paper Pro's).
-var useLandlock = true
+var UseLandlock = true
+
+// Options: what the sandboxed backend may still reach.
+type Options struct {
+	Jail     string   // empty folder to chroot into (created, owned by root)
+	Dirs     []string // data folders, already opened as os.Root; handed to the sandbox user
+	Shared   []string // folders opened before, kept by their owner; Landlock allows writing
+	ReadOnly []string // folders opened before for reading only (e.g. the library)
+	// TCPPorts: Landlock allows connecting to these ports only (and DNS).
+	// Empty: Landlock doesn't restrict the network (an app whose only
+	// server is one the user typed in, on any port).
+	TCPPorts []uint16
+}
 
 // blockedSyscalls fail inside the sandbox. On arm64 (Paper Pro, Paper Pro
 // Move) the filter is an allowlist (seccomp_linux.go) and none of these
@@ -85,12 +100,10 @@ var blockedSyscalls = []string{
 // jailFiles are copied into the jail's /etc so that DNS keeps working.
 var jailFiles = []string{"/etc/resolv.conf", "/etc/hosts"}
 
-// enterSandbox applies all layers. jail is an empty folder to chroot into
-// (created, owned by root); dirs are the data folders, already opened as
-// os.Root and handed to the sandbox user; shared are folders opened
-// before that keep their owner (Landlock allows writing them). It returns
-// a short description of the active layers.
-func enterSandbox(jail string, shared []string, dirs ...string) (string, error) {
+// Enter applies all layers and returns a short description of the active
+// ones. It can't be undone.
+func Enter(o Options) (string, error) {
+	jail, shared, dirs := o.Jail, o.Shared, o.Dirs
 	var layers []string
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -115,17 +128,26 @@ func enterSandbox(jail string, shared []string, dirs ...string) (string, error) 
 	}
 
 	// Landlock rules are set by path, so before the chroot.
-	ro := []string{jail, "/etc", "/usr/share/ca-certificates", "/usr/lib/ssl"}
+	ro := append([]string{jail, "/etc", "/usr/share/ca-certificates", "/usr/lib/ssl"}, o.ReadOnly...)
 	if t, err := filepath.EvalSymlinks("/etc/resolv.conf"); err == nil && !strings.HasPrefix(t, "/etc/") {
 		ro = append(ro, filepath.Dir(t))
 	}
-	if useLandlock {
-		if err := landlock.V11.BestEffort().Restrict(
+	if UseLandlock {
+		rules := []landlock.Rule{
 			landlock.RODirs(ro...).IgnoreIfMissing(),
 			landlock.RWDirs(append(append([]string{}, dirs...), shared...)...),
-			landlock.ConnectTCP(80), landlock.ConnectTCP(443), landlock.ConnectTCP(8080), landlock.ConnectTCP(8443),
-			landlock.ConnectTCP(53), landlock.BindUDP(0), landlock.ConnectSendUDP(53),
-		); err != nil {
+		}
+		var err error
+		if len(o.TCPPorts) > 0 {
+			for _, p := range o.TCPPorts {
+				rules = append(rules, landlock.ConnectTCP(p))
+			}
+			rules = append(rules, landlock.ConnectTCP(53), landlock.BindUDP(0), landlock.ConnectSendUDP(53))
+			err = landlock.V11.BestEffort().Restrict(rules...)
+		} else {
+			err = landlock.V11.BestEffort().RestrictPaths(rules...)
+		}
+		if err != nil {
 			return "", fmt.Errorf("landlock: %w", err)
 		}
 		if v := landlockABI(); v > 0 {
