@@ -130,6 +130,12 @@ Rectangle {
     readonly property int lineSpacing: settings.lineSpacing || 125
     readonly property bool justified: settings.align === "justify"
     readonly property int sideMargin: settings.margin === "narrow" ? 24 : settings.margin === "wide" ? 104 : 56
+    // Tablet turned sideways (xochitl then gives the app a wide window): two
+    // pages side by side like an open book, turned two at a time. The left
+    // page is always an even one, so the spreads stay the same.
+    readonly property bool spread: root.width > root.height
+    readonly property int gutter: Math.max(48, sideMargin)
+    readonly property int pageStep: spread ? 2 : 1
     // line spacing and alignment live in the page's rich text: rewrite the
     // paragraphs the backend wrote (style="line-height:125%")
     function restyle(h) {
@@ -414,7 +420,8 @@ Rectangle {
         }
         return { name: exportName, url: pageData.url || "", fontSize: fontSize, font: settings.font || "sans",
                  justify: justified, areaWidth: Math.round(readerArea.width),
-                 width: Math.round(root.width), height: Math.round(root.height),
+                 // two pages on screen: each PDF page is one of them with its margins
+                 width: Math.round(spread ? readerArea.width + 2 * readerArea.x : root.width), height: Math.round(root.height),
                  x: Math.round(readerArea.x), y: Math.round(readerArea.y),
                  lines: lines, pageStarts: pageStarts, pageHeights: pageHeights }
     }
@@ -563,7 +570,7 @@ Rectangle {
         else if (topCharPos >= 0) target = pageOfY(te.positionToRectangle(topCharPos).y, starts)
         pageStarts = starts
         pageHeights = heights
-        pageIndex = Math.max(0, Math.min(target, starts.length - 1))
+        pageIndex = spreadStart(Math.max(0, Math.min(target, starts.length - 1)))
         computeHeadingPages()
         recordTop()
     }
@@ -590,26 +597,35 @@ Rectangle {
         }
         headingPages = res
     }
+    function spreadStart(i) { return spread ? i - i % 2 : i }
     function goToPage(i) {
-        const n = Math.max(0, Math.min(i, pageCount - 1))
+        const n = spreadStart(Math.max(0, Math.min(i, pageCount - 1)))
         if (n === pageIndex) return
         pageIndex = n
         recordTop()
         send(reqPosition, { page: n })
     }
-    function nextPage() { goToPage(pageIndex + 1) }
-    function prevPage() { goToPage(pageIndex - 1) }
+    function nextPage() { goToPage(pageIndex + pageStep) }
+    function prevPage() { goToPage(pageIndex - pageStep) }
+    readonly property bool lastSpread: pageIndex + pageStep >= pageCount
+    // "3 / 20", or "3–4 / 20" with two pages on screen
+    readonly property string pagesShown: (pageIndex + 1) + (spread && pageIndex + 1 < pageCount ? "\u2013" + (pageIndex + 2) : "")
 
     // The link under a finger: also look a little around the touch point,
     // fingers are not as exact as a mouse.
+    // With two pages on screen, the right half belongs to the right page.
     function linkAt(item, x, y) {
-        const pt = item.mapToItem(te, x, y)
-        const top = pageStarts[pageIndex], bottom = top + pageHeights[pageIndex]
+        const right = spread && rightPage.item && item.mapToItem(root, x, y).x > readerArea.x + readerArea.width + gutter / 2
+        const t = right ? rightPage.item.textEdit : te
+        const i = pageIndex + (right ? 1 : 0)
+        if (i >= pageCount) return ""
+        const pt = item.mapToItem(t, x, y)
+        const top = pageStarts[i], bottom = top + pageHeights[i]
         const offsets = [[0, 0], [0, -14], [0, 14], [-14, 0], [14, 0]]
         for (const o of offsets) {
             const ty = pt.y + o[1]
             if (ty < top || ty > bottom) continue
-            const l = te.linkAt(pt.x + o[0], ty)
+            const l = t.linkAt(pt.x + o[0], ty)
             if (l) return l
         }
         return ""
@@ -773,12 +789,14 @@ Rectangle {
     // ------------------------------------------------------------ reader view
     // Where the article is drawn (also measured while hidden: the backend
     // sizes images to fit it).
+    // In landscape this is the left page; the right one is laid out the same.
     Item {
         id: readerArea
         objectName: "readerArea"
-        anchors.fill: parent
-        anchors.leftMargin: sideMargin; anchors.rightMargin: sideMargin
+        anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+        anchors.leftMargin: sideMargin
         anchors.topMargin: 48; anchors.bottomMargin: 76
+        width: spread ? Math.floor((parent.width - 2 * sideMargin - gutter) / 2) : parent.width - 2 * sideMargin
         visible: view === "page"
         onHeightChanged: { schedulePaginate(); viewportTimer.restart() }
         onWidthChanged: viewportTimer.restart()
@@ -815,6 +833,51 @@ Rectangle {
             }
         }
     }
+    // The right page of a spread: a second copy of the text with the same
+    // width and font (so the same layout), showing the next page. Only made
+    // in landscape.
+    Rectangle {   // fold between the pages
+        visible: view === "page" && spread
+        x: readerArea.x + readerArea.width + gutter / 2
+        y: readerArea.y; width: 1; height: readerArea.height
+        color: "#bbb"
+    }
+    Loader {
+        id: rightPage
+        objectName: "rightPage"
+        active: spread
+        visible: view === "page"
+        x: readerArea.x + readerArea.width + gutter
+        y: readerArea.y
+        // no size here: a Loader with a size forces it on the page, and the
+        // page's height must end above a line that doesn't fit
+        sourceComponent: Flickable {
+            readonly property alias textEdit: te2
+            readonly property int index: pageIndex + 1
+            visible: index < pageCount
+            width: readerArea.width
+            height: pageHeights[index] || 0
+            clip: true
+            interactive: false
+            contentWidth: width
+            contentHeight: te2.contentHeight
+            contentY: pageStarts[index] || 0
+            TextEdit {
+                id: te2
+                objectName: "te2"
+                width: readerArea.width
+                readOnly: true
+                selectByMouse: false
+                activeFocusOnPress: false
+                textFormat: TextEdit.RichText
+                wrapMode: TextEdit.Wrap
+                color: "black"
+                font.pixelSize: fontSize
+                font.family: familyOf(settings.font)
+                text: pageHtml
+            }
+        }
+    }
     Timer {
         id: viewportTimer
         interval: 500
@@ -845,7 +908,7 @@ Rectangle {
         visible: view === "page"
         anchors.bottom: parent.bottom; anchors.bottomMargin: 22
         anchors.horizontalCenter: parent.horizontalCenter
-        text: (pageIndex + 1) + " / " + pageCount
+        text: pagesShown + " / " + pageCount
         font.pixelSize: 22; color: "#555"
     }
 
@@ -1047,7 +1110,7 @@ Rectangle {
             Slider {
                 id: pageSlider
                 Layout.fillWidth: true
-                from: 0; to: Math.max(1, pageCount - 1); stepSize: 1
+                from: 0; to: Math.max(1, spreadStart(pageCount - 1)); stepSize: pageStep
                 snapMode: Slider.SnapAlways
                 enabled: pageCount > 1
                 value: pageIndex
@@ -1065,8 +1128,8 @@ Rectangle {
                     color: "white"; border.color: "black"; border.width: 4
                 }
             }
-            Text { text: "Page " + (pageIndex + 1) + " of " + pageCount; font.pixelSize: 26 }
-            EButton { text: "›"; fontSize: 40; enabled: pageIndex < pageCount - 1; onClicked: nextPage() }
+            Text { text: (spread && pageIndex + 1 < pageCount ? "Pages " : "Page ") + pagesShown + " of " + pageCount; font.pixelSize: 26 }
+            EButton { text: "›"; fontSize: 40; enabled: !lastSpread; onClicked: nextPage() }
         }
     }
 
@@ -1175,7 +1238,7 @@ Rectangle {
                 }
                 readonly property int current: {
                     let c = 0
-                    for (let i = 0; i < items.length; i++) if (items[i].page >= 0 && items[i].page <= pageIndex) c = i
+                    for (let i = 0; i < items.length; i++) if (items[i].page >= 0 && items[i].page < pageIndex + pageStep) c = i
                     return c
                 }
                 onVisibleChanged: if (visible) page = Math.floor(current / perPage)

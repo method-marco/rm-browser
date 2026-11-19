@@ -475,5 +475,77 @@ Item {
             compare(win.keysOut, 0, "keys went on to xochitl")
             Bus.deliver(107, {})
         }
+
+        // tablet turned sideways: two pages side by side, turned two at a time
+        function test_16_landscape_two_pages() {
+            Bus.deliver(101, state())
+            showArticle(0)
+            app.goToPage(5)
+            const keepChar = app.topCharPos
+            win.width = 1696; win.height = 954
+            tryVerify(function () { return app.spread }, 2000, "landscape")
+            const area = findChild(app, "readerArea")
+            tryVerify(function () { return Math.abs(te.width - area.width) < 1 && area.width < win.width / 2 }, 2000, "half-width column")
+            wait(300)
+            tryVerify(function () { return app.pageIndex % 2 === 0 }, 2000, "left page is even")
+            // the reading position is on screen (left or right page)
+            const y = te.positionToRectangle(keepChar).y
+            const p = app.pageOfY(y)
+            verify(p === app.pageIndex || p === app.pageIndex + 1, "position kept: page " + p + " spread " + app.pageIndex)
+            const te2 = findChild(app, "te2")
+            verify(te2, "right page")
+            compare(te2.width, te.width)
+            tryCompare(te2, "contentHeight", te.contentHeight)
+            wait(300)
+            // no line or picture is cut at the bottom of a page
+            const H = Math.floor(area.height)
+            for (let k = 1; k < app.pageCount; k++) {
+                verify(app.pageHeights[k - 1] <= H, "page " + (k - 1) + " too high")
+                const s = app.pageStarts[k]
+                const lr = te.positionToRectangle(te.positionAt(4, s + 1))
+                verify(lr.y >= s - 1, "page " + k + " starts inside a line: y " + lr.y + " start " + s + " h " + lr.height)
+            }
+            // the right page ends where its own page ends, too
+            const rp = findChild(app, "rightPage").item
+            compare(rp.height, app.pageHeights[app.pageIndex + 1])
+            shot("landscape")
+
+            app.goToPage(0)
+            Bus.clear()
+            mouseClick(app, win.width - 60, win.height / 2)
+            compare(app.pageIndex, 2)
+            compare(Bus.lastOf(7).page, 2)
+            mouseDrag(app, win.width * 0.8, win.height / 2, -400, 10)
+            compare(app.pageIndex, 4)
+            mouseClick(app, 60, win.height / 2)
+            compare(app.pageIndex, 2)
+            app.goToPage(3)
+            compare(app.pageIndex, 2, "spreads start on an even page")
+
+            // a link on the right page opens
+            const txt = te.getText(0, te.length)
+            const i = txt.indexOf("LINKTARGET")
+            const lp = app.pageOfY(te.positionToRectangle(i).y)
+            app.goToPage(lp)
+            wait(50)
+            const r = te2.positionToRectangle(i + 2)
+            if (lp % 2 === 1) {
+                Bus.clear()
+                const pt = te2.mapToItem(app, r.x + 4, r.y + r.height / 2)
+                mouseClick(app, pt.x, pt.y)
+                compare(Bus.lastOf(2).input, "https://example.org/linked")
+            } else {
+                tapText("LINKTARGET")
+                compare(Bus.lastOf(2).input, "https://example.org/linked")
+            }
+
+            // PDF pages are single reader pages with their margins
+            const req = app.exportLayout()
+            compare(req.width, Math.round(area.width + 2 * area.x))
+
+            win.width = 954; win.height = 1696
+            tryVerify(function () { return !app.spread && Math.abs(te.width - (win.width - 2 * app.sideMargin)) < 1 }, 2000, "portrait again")
+            tryVerify(function () { return findChild(app, "te2") === null }, 2000, "right page gone in portrait")
+        }
     }
 }

@@ -15,6 +15,9 @@ An [AppLoad](https://github.com/asivery/rm-appload) app for reMarkable tablets: 
 - **Pages, not scrolling:** the text is split into screen pages, and no line or picture is ever cut
   at the bottom edge. Tap the **right** side (or swipe left) for the next page, the **left** side to go
   back, the **middle** for the menu. Page slider in the menu. Your page is remembered in the history
+- **Two pages in landscape:** turn the tablet sideways and the reader shows two pages side by side,
+  like an open book, turned two at a time; turn it back for one page. You stay where you were
+  reading. (Save as PDF then makes PDF pages the size of one of these pages)
 - **Contents** (like a book's table of contents): the article's headings with their page numbers
   (tap to jump), and the site's navigation menu as a list of links
 - **DuckDuckGo** search with **autocomplete** while you type, plus matching pages and searches
