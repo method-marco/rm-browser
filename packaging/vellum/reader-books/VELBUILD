@@ -22,7 +22,7 @@ build() {
 	apt-get update
 	apt-get install -y --no-install-recommends qt6-base-dev
 
-	# go.mod needs Go 1.25 (os.Root file functions); the image has 1.24
+	# go.mod needs Go 1.26; the image has 1.24 (GOTOOLCHAIN=auto fetches it)
 	cd "$builddir"/backend
 	GOTOOLCHAIN=auto GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build \
 		-buildvcs=false -trimpath -ldflags="-s -w -X main.version=$pkgver" \
