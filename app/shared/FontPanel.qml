@@ -13,6 +13,7 @@ Item {
     property var defaults: null          // the app's defaults: shows "Defaults" (reset)
     property bool showParagraphs: false  // the paragraph style row (books)
     property bool showBookStyle: false   // the book's own formatting or plain (books)
+    property bool showHyphenation: false // words broken at line ends (books)
     signal setSetting(var obj)
     signal closeRequested()
 
@@ -133,6 +134,13 @@ Item {
                 Text { color: Theme.ink; text: "Alignment"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
                 EButton { text: "Left"; active: !fp.justified; onClicked: fp.setSetting({ align: "left" }) }
                 EButton { text: "Justified"; active: fp.justified; onClicked: fp.setSetting({ align: "justify" }) }
+            }
+            RowLayout {
+                spacing: 12
+                visible: !fp.fontListOpen && !fp.themeListOpen && fp.showHyphenation
+                Text { color: Theme.ink; text: "Hyphenation"; font.pixelSize: 26; font.bold: true; Layout.preferredWidth: 170 }
+                EButton { text: "On"; active: fp.settings.hyphenate !== false; onClicked: fp.setSetting({ hyphenate: true }) }
+                EButton { text: "Off"; active: fp.settings.hyphenate === false; onClicked: fp.setSetting({ hyphenate: false }) }
             }
             RowLayout {
                 spacing: 12

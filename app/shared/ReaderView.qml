@@ -244,7 +244,19 @@ Item {
         pageIndex = spreadStart(Math.max(0, Math.min(target, starts.length - 1)))
         recordTop()
         redrawPage()
+        applyHighlight()
         laidOut()
+    }
+    // a search match, shown selected (inverted): {char, len} in visible
+    // characters, or null. Set before the text; shown once it is laid out.
+    property var highlight: null
+    onHighlightChanged: if (pageHtml !== "" && nextHtml === "") applyHighlight()
+    function applyHighlight() {
+        const edits = [te].concat(rightPage.item ? [rightPage.item.textEdit] : [])
+        for (const t of edits) t.deselect()
+        if (!highlight || pageHtml === "" || highlight.len <= 0) return
+        const a = positionOfChar(highlight.char), e = positionOfChar(highlight.char + highlight.len - 1) + 1
+        for (const t of edits) t.select(a, e)
     }
     function pageOfY(y, starts) {
         const s = starts || pageStarts
@@ -265,6 +277,8 @@ Item {
         recordTop()
         pageTurned(n)
     }
+    // the page with visible character k of this text
+    function goToChar(k) { goToPage(pageOfY(te.positionToRectangle(positionOfChar(k)).y)) }
     function nextPage() { if (lastSpread) pastEnd(); else goToPage(pageIndex + pageStep) }
     function prevPage() { if (pageIndex === 0) beforeStart(); else goToPage(pageIndex - pageStep) }
 
@@ -382,6 +396,9 @@ Item {
                 textFormat: TextEdit.RichText
                 wrapMode: TextEdit.Wrap
                 color: Theme.ink
+                persistentSelection: true      // search matches (highlight)
+                selectionColor: Theme.ink
+                selectedTextColor: Theme.paper
                 font.pixelSize: rv.fontSize
                 font.family: rv.fontFamily
                 text: pageHtml
@@ -436,6 +453,9 @@ Item {
                 textFormat: TextEdit.RichText
                 wrapMode: TextEdit.Wrap
                 color: Theme.ink
+                persistentSelection: true      // search matches (highlight)
+                selectionColor: Theme.ink
+                selectedTextColor: Theme.paper
                 font.pixelSize: rv.fontSize
                 font.family: rv.fontFamily
                 text: pageHtml

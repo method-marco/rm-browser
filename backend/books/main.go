@@ -52,6 +52,7 @@ const (
 	reqClosed   = 12 // the app was closed: send the position now
 	reqPull     = 13 // go to the server's position, whatever it is
 	reqPush     = 14 // send this position, even if unchanged
+	reqSearch   = 15 // {query}: answers resSearch
 )
 
 // Message types backend -> frontend.
@@ -64,6 +65,7 @@ const (
 	resBusy    = 106 // {busy, text}
 	resToast   = 107 // {message}
 	resSync    = 108 // {chapter, char, percent, device, manual}: a newer position from another device
+	resSearch  = 109 // {book, query, hits: [{chapter, char, len, before, match, after, title, percent}], total}
 )
 
 const (
@@ -82,6 +84,7 @@ func defaultsMap() map[string]any {
 	b, _ := json.Marshal(ebookDefaults)
 	_ = json.Unmarshal(b, &m)
 	m["bookStyle"] = true
+	m["hyphenate"] = true
 	delete(m, "theme") // colours are not a book default
 	return m
 }
@@ -92,6 +95,7 @@ type Settings struct {
 	GreyImages bool  `json:"greyImages"`
 	ManualSync bool  `json:"manualSync"` // false: sync on open, page turns and close
 	BookStyle  *bool `json:"bookStyle"`  // the book's own formatting (css.go); nil = on
+	Hyphenate  *bool `json:"hyphenate"`  // soft hyphens in words (hyphenate.go); nil = on
 }
 
 type BookState struct {
@@ -235,6 +239,10 @@ func newApp(al *appload.AppLoad, st *store.Store, lib *library) *App {
 		on := true
 		a.cfg.Settings.BookStyle = &on
 	}
+	if a.cfg.Settings.Hyphenate == nil {
+		on := true
+		a.cfg.Settings.Hyphenate = &on
+	}
 	if a.cfg.Books == nil {
 		a.cfg.Books = map[string]*BookState{}
 	}
@@ -340,7 +348,9 @@ func (a *App) handle(typ int, contents string) {
 		GreyImages *bool   `json:"greyImages"`
 		AutoSync   *bool   `json:"autoSync"`
 		BookStyle  *bool   `json:"bookStyle"`
+		Hyphenate  *bool   `json:"hyphenate"`
 		Server     string  `json:"server"`
+		Query      string  `json:"query"`
 		Username   string  `json:"username"`
 		Password   *string `json:"password"`
 		Register   bool    `json:"register"`
@@ -409,6 +419,8 @@ func (a *App) handle(typ int, contents string) {
 		a.sendState()
 	case reqClosed:
 		go a.pushNow(false)
+	case reqSearch:
+		a.search(req.Query)
 	case reqSettings:
 		a.mu.Lock()
 		s := &a.cfg.Settings
@@ -424,6 +436,10 @@ func (a *App) handle(typ int, contents string) {
 			v := *req.BookStyle
 			s.BookStyle, images = &v, true // a new chapter text
 		}
+		if req.Hyphenate != nil && (s.Hyphenate == nil || *req.Hyphenate != *s.Hyphenate) {
+			v := *req.Hyphenate
+			s.Hyphenate, images = &v, true
+		}
 		if req.AutoSync != nil {
 			s.ManualSync = !*req.AutoSync
 		}
@@ -434,6 +450,30 @@ func (a *App) handle(typ int, contents string) {
 			a.resendCurrent()
 		}
 	}
+}
+
+// search answers the matches of query in the open book.
+func (a *App) search(query string) {
+	a.mu.Lock()
+	b := a.cur
+	if b == nil {
+		a.mu.Unlock()
+		return
+	}
+	first := b.searchTexts == nil
+	a.mu.Unlock()
+	if first {
+		a.busy(true, "Searching…")
+	}
+	a.mu.Lock()
+	t0 := time.Now()
+	hits, total := b.search(query)
+	a.mu.Unlock()
+	log.Printf("search: %d matches in %v", total, time.Since(t0).Round(time.Millisecond))
+	if first {
+		a.busy(false, "")
+	}
+	a.send(resSearch, map[string]any{"book": b.id, "query": query, "hits": hits, "total": total})
 }
 
 // ---------------------------------------------------------------- library
@@ -573,8 +613,8 @@ func (a *App) showChapter(ch, k, dir int) {
 
 func (a *App) renderShownLocked(b *book, ch int) *chapter {
 	s := a.cfg.Settings
-	bookStyle := s.BookStyle == nil || *s.BookStyle
-	key := fmt.Sprintf("%s|%d|%d|%d|%v|%v|%v", b.id, ch, a.vpW, a.vpH, s.NoImages, s.GreyImages, bookStyle)
+	opt := renderOptions{bookStyle: s.BookStyle == nil || *s.BookStyle, hyphenate: s.Hyphenate == nil || *s.Hyphenate}
+	key := fmt.Sprintf("%s|%d|%d|%d|%v|%v|%+v", b.id, ch, a.vpW, a.vpH, s.NoImages, s.GreyImages, opt)
 	if c, ok := a.shown[key]; ok {
 		return c
 	}
@@ -583,7 +623,7 @@ func (a *App) renderShownLocked(b *book, ch int) *chapter {
 		maxW, maxH, grey := a.vpW, a.vpH, s.GreyImages
 		images = func(p string) (string, int, int, bool) { return a.bookImage(b, p, maxW, maxH, grey) }
 	}
-	c := b.ep.renderChapter(ch, images, a.vpW, bookStyle)
+	c := b.ep.renderChapter(ch, images, a.vpW, opt)
 	a.shown[key] = c
 	a.shownKeys = append(a.shownKeys, key)
 	if len(a.shownKeys) > 3 {

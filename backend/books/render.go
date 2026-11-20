@@ -79,13 +79,24 @@ type chapterWriter struct {
 	inAlign  string  // inherited from enclosing blocks
 	inIndent float64 // em, -1 = none
 	inChars  string
+	hyph     *hyphenator // soft hyphens in words (nil: none)
+	noHyph   int         // inside headings, preformatted text, code
 }
 
-// renderChapter writes chapter frag; bookStyle: with the book's own
-// formatting (css.go). The text, and so every position, is the same either way.
-func (bk *epubBook) renderChapter(frag int, images ImageFunc, maxW int, bookStyle ...bool) *chapter {
+// renderOptions: how a chapter is written. The text, and so every
+// position, is the same either way.
+type renderOptions struct {
+	bookStyle bool // the book's own formatting (css.go)
+	hyphenate bool // soft hyphens where words may break (hyphenate.go)
+}
+
+// renderChapter writes chapter frag (see renderOptions).
+func (bk *epubBook) renderChapter(frag int, images ImageFunc, maxW int, opt renderOptions) *chapter {
 	w := &chapterWriter{book: bk, frag: frag, anchors: map[string]int{}, images: images, maxW: maxW, inIndent: -1}
-	if len(bookStyle) > 0 && bookStyle[0] && frag >= 0 && frag < len(bk.frags) {
+	if opt.hyphenate {
+		w.hyph = hyphenatorFor(bk.lang)
+	}
+	if opt.bookStyle && frag >= 0 && frag < len(bk.frags) {
 		w.sheet = bk.sheetFor(frag)
 		if w.sheet == nil {
 			w.sheet = styleSheet{} // no CSS: still the book's style attributes
@@ -98,7 +109,7 @@ func (bk *epubBook) renderChapter(frag int, images ImageFunc, maxW int, bookStyl
 }
 
 func (w *chapterWriter) text(n *domNode) {
-	var sb strings.Builder
+	rs := make([]rune, 0, len(n.text))
 	for i, r := range n.text {
 		if !keepRune(r) {
 			continue
@@ -106,9 +117,12 @@ func (w *chapterWriter) text(n *domNode) {
 		if isCounted(r) {
 			w.pos = append(w.pos, textPos{int32(n.seq), int32(i)})
 		}
-		sb.WriteRune(r)
+		rs = append(rs, r)
 	}
-	s := template.HTMLEscapeString(sb.String())
+	if w.hyph != nil && w.noHyph == 0 {
+		rs = w.hyph.hyphenate(rs)
+	}
+	s := template.HTMLEscapeString(string(rs))
 	if w.href != "" && strings.TrimSpace(s) != "" {
 		w.b.WriteString(linkOpen(w.href) + s + "</a>")
 		return
@@ -307,7 +321,9 @@ func (w *chapterWriter) write(n *domNode) {
 			}
 			open = f.open(fmt.Sprintf("h%d", level))
 		}
+		w.noHyph++ // headings stay whole words
 		w.block(open, fmt.Sprintf("</h%d>", level), n)
+		w.noHyph--
 	case "p":
 		w.block(w.paragraphOpen(n), "</p>", n)
 	case "li":
@@ -338,7 +354,11 @@ func (w *chapterWriter) write(n *domNode) {
 		w.block("<"+n.name+">", "</"+n.name+">", n)
 	case "table":
 		w.block(`<table border="1" cellspacing="0" cellpadding="6">`, "</table>", n)
-	case "thead", "tbody", "tfoot", "tr", "sub", "sup", "small", "code":
+	case "code":
+		w.noHyph++
+		w.wrap("<code>", "</code>", n)
+		w.noHyph--
+	case "thead", "tbody", "tfoot", "tr", "sub", "sup", "small":
 		w.wrap("<"+n.name+">", "</"+n.name+">", n)
 	case "th", "td":
 		open := "<" + n.name
@@ -353,9 +373,13 @@ func (w *chapterWriter) write(n *domNode) {
 	case "caption", "figcaption":
 		w.block(`<p align="center"><i>`, "</i></p>", n)
 	case "pre":
+		w.noHyph++
 		w.wrap(`<pre style="white-space:pre-wrap">`, "</pre>", n)
+		w.noHyph--
 	case "kbd", "samp", "tt":
+		w.noHyph++
 		w.wrap("<code>", "</code>", n)
+		w.noHyph--
 	case "b", "strong":
 		w.inline(n, func() { w.wrap("<b>", "</b>", n) })
 	case "i", "em", "cite", "dfn", "var":

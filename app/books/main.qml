@@ -64,6 +64,7 @@ Rectangle {
     readonly property int reqClosed: 12
     readonly property int reqPull: 13
     readonly property int reqPush: 14
+    readonly property int reqSearch: 15
 
     property var appState: ({ settings: { fontSize: 34, font: "literata", lineSpacing: 125, align: "justify", margin: "normal",
                                           paragraphs: "indent", noImages: false, greyImages: false },
@@ -75,7 +76,7 @@ Rectangle {
 
     property string view: "library"     // library | book | error
     property bool menuOpen: false
-    property string panel: ""           // "" | contents | font | settings | login
+    property string panel: ""           // "" | contents | search | font | settings | login
     property string busyText: ""
     property string errorText: ""
     property string toast: ""
@@ -92,6 +93,17 @@ Rectangle {
     property bool moved: false          // the reader turned a page since the book was opened
     property bool reportOnLayout: false // tell the backend the position once the new chapter is laid out
     property var backStack: []          // positions before following links (‹ Back)
+
+    // search in the book (backend/books/search.go)
+    property string searchedQuery: ""   // the query of the hits shown
+    property var searchHits: []         // [{chapter, char, len, before, match, after, title, percent}]
+    property int searchTotal: 0         // matches in all (only the first ones are sent)
+    property bool searching: false
+    property int hitIndex: -1           // the match being shown in the book (its bar), or -1
+    function resetSearch() {
+        searchedQuery = ""; searchHits = []; searchTotal = 0; searching = false; hitIndex = -1
+        reader.highlight = null
+    }
     readonly property var prefix: {
         const out = []
         let n = 0
@@ -141,6 +153,7 @@ Rectangle {
                 topChar = 0
                 moved = false
                 backStack = []
+                resetSearch()
                 break
             case 105:
                 books = d.books || []
@@ -155,6 +168,15 @@ Rectangle {
             case 106: busyText = d.busy ? d.text : ""; break
             case 107: showToast(d.message); break
             case 108: syncedPosition(d); break
+            case 109:
+                if (!book || d.book !== book.id) break
+                searching = false
+                searchedQuery = d.query
+                searchHits = d.hits || []
+                searchTotal = d.total || 0
+                hitIndex = -1
+                searchList.page = 0
+                break
             }
         }
     }
@@ -183,6 +205,8 @@ Rectangle {
         if (!book || d.book !== book.id) return
         chapter = d.chapter
         view = "book"
+        const h = hitIndex >= 0 ? searchHits[hitIndex] : null
+        reader.highlight = h && h.chapter === d.chapter ? { char: h.char, len: h.len } : null
         reader.setContent(d.html, d.end ? { end: true } : { char: Math.max(0, d.char) })
         busyText = ""
     }
@@ -234,7 +258,7 @@ Rectangle {
         send(reqSettings, obj)
     }
     function closePanel() {
-        if (panel === "login") {
+        if (panel === "login" || panel === "search") {
             Qt.inputMethod.hide()
             root.forceActiveFocus()
         }
@@ -389,6 +413,7 @@ Rectangle {
                 spacing: 12
                 visible: view === "book"
                 EButton { text: "Contents"; onClicked: { panel = "contents"; menuOpen = false } }
+                EButton { text: "Search"; onClicked: { menuOpen = false; openSearch() } }
                 EButton { text: "Aa  Font"; onClicked: { menuOpen = false; panel = "font" } }
                 EButton { text: "Sync"; visible: !!syncInfo.loggedIn; onClicked: { menuOpen = false; send(reqSync) } }
                 EButton { text: "Settings"; onClicked: { panel = "settings"; menuOpen = false } }
@@ -511,6 +536,148 @@ Rectangle {
         }
     }
 
+    // ------------------------------------------------------------ search
+    function openSearch() {
+        panel = "search"
+        searchField.text = searchedQuery
+        if (searchHits.length === 0) searchField.forceActiveFocus()
+    }
+    function runSearch() {
+        const q = searchField.text.trim()
+        if (q === "") return
+        Qt.inputMethod.hide()
+        root.forceActiveFocus()
+        searching = true
+        send(reqSearch, { query: q })
+    }
+    // go to match i (from the list, or the bar's ‹ ›); ‹ Back returns to
+    // where the search started
+    function showHit(i) {
+        if (i < 0 || i >= searchHits.length) return
+        if (hitIndex < 0) remember()
+        hitIndex = i
+        const h = searchHits[i]
+        if (h.chapter === chapter && reader.pageHtml !== "") {
+            reader.highlight = { char: h.char, len: h.len }
+            reader.goToChar(h.char)   // (a page turn: reports the position)
+        } else {
+            goTo(h.chapter, h.char, 1)
+        }
+    }
+    function endSearchBar() {
+        hitIndex = -1
+        reader.highlight = null
+    }
+    function escaped(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
+
+    Rectangle {
+        visible: panel === "search"
+        anchors.fill: parent
+        color: Theme.paper
+        MouseArea { anchors.fill: parent }
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 40
+            spacing: 18
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+                Text { color: Theme.ink; text: "Search"; font.pixelSize: 42; font.bold: true; Layout.fillWidth: true }
+                EButton { text: "×"; fontSize: 40; onClicked: closePanel() }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+                TextField {
+                    id: searchField
+                    objectName: "searchField"
+                    color: Theme.ink
+                    placeholderTextColor: Theme.dim
+                    placeholderText: "Words in this book"
+                    Layout.fillWidth: true
+                    implicitHeight: 80
+                    font.pixelSize: 28
+                    inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                    background: Rectangle { color: Theme.paper; border.color: Theme.ink; border.width: 3; radius: 10 }
+                    onAccepted: runSearch()
+                }
+                EButton { text: "Search"; active: true; enabled: searchField.text.trim() !== "" && !searching; onClicked: runSearch() }
+            }
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.pixelSize: 24; color: Theme.dim
+                text: searching ? "Searching…"
+                      : searchedQuery === "" ? "Case and accents don't matter."
+                      : searchTotal === 0 ? "Nothing found for “" + searchedQuery + "”."
+                      : searchTotal + (searchTotal === 1 ? " match" : " matches")
+                        + (searchHits.length < searchTotal ? " (the first " + searchHits.length + " shown)" : "")
+                        + " for “" + searchedQuery + "”"
+            }
+            PagedList {
+                id: searchList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                rowHeight: 150
+                items: searchHits
+                rowDelegate: Item {
+                    width: searchList.width
+                    height: searchList.rowHeight
+                    function tapped() {
+                        root.showHit(searchList.page * searchList.perPage + index)
+                        closePanel()
+                    }
+                    Column {
+                        anchors.left: parent.left; anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 6
+                        Text {
+                            width: parent.width
+                            text: (modelData.title || ("Chapter " + (modelData.chapter + 1))) + "  ·  " + Math.round(100 * modelData.percent) + "%"
+                            font.pixelSize: 22; color: Theme.dim; elide: Text.ElideRight
+                        }
+                        Text {
+                            width: parent.width
+                            textFormat: Text.StyledText
+                            text: escaped(modelData.before) + "<b><u>" + escaped(modelData.match) + "</u></b>" + escaped(modelData.after)
+                            color: Theme.ink
+                            font.pixelSize: 26
+                            wrapMode: Text.Wrap
+                            maximumLineCount: 3
+                            elide: Text.ElideRight
+                        }
+                    }
+                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
+                }
+            }
+        }
+    }
+    // the match on screen: the next and previous ones, back to the list
+    Rectangle {
+        id: searchBar
+        objectName: "searchBar"
+        visible: hitIndex >= 0 && view === "book" && panel === "" && !menuOpen
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        height: 96
+        color: Theme.paper
+        Rectangle { anchors.top: parent.top; width: parent.width; height: 3; color: Theme.ink }
+        MouseArea { anchors.fill: parent }
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 24; anchors.rightMargin: 24; anchors.topMargin: 14; anchors.bottomMargin: 14
+            spacing: 14
+            EButton { text: "‹"; fontSize: 40; enabled: hitIndex > 0; onClicked: showHit(hitIndex - 1) }
+            EButton {
+                Layout.fillWidth: true
+                text: (hitIndex + 1) + " / " + searchHits.length + "   “"
+                      + (searchedQuery.length > 18 ? searchedQuery.slice(0, 17) + "…" : searchedQuery) + "”"
+                onClicked: openSearch()
+            }
+            EButton { text: "›"; fontSize: 40; enabled: hitIndex + 1 < searchHits.length; onClicked: showHit(hitIndex + 1) }
+            EButton { text: "×"; fontSize: 40; onClicked: endSearchBar() }
+        }
+    }
+
     // ------------------------------------------------------------ font panel
     FontPanel {
         settings: root.settings
@@ -518,6 +685,7 @@ Rectangle {
         defaults: appState.defaults || null
         showParagraphs: true
         showBookStyle: true
+        showHyphenation: true
         onSetSetting: (obj) => root.setSetting(obj)
         onCloseRequested: root.closePanel()
     }

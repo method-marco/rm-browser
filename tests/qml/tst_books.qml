@@ -253,6 +253,116 @@ Item {
             verify(Bus.lastOf(8) !== null)
         }
 
+        function findTextWith(item, part) {
+            if (!item) return null
+            if (item.visible && item.font !== undefined && typeof item.text === "string" && item.text.indexOf(part) >= 0
+                && item.clicked === undefined && item.objectName !== "te" && item.objectName !== "te2") return item
+            for (let i = 0; i < item.children.length; i++) {
+                const f = findTextWith(item.children[i], part)
+                if (f) return f
+            }
+            return null
+        }
+        function tapItem(it) {
+            verify(it, "item to tap")
+            const p = it.mapToItem(app, it.width / 2, it.height / 2)
+            mouseClick(app, p.x, p.y)
+        }
+        // visible characters before a word of the test chapter
+        function charOfWord(w) {
+            const all = te.getText(0, te.length)
+            const i = all.indexOf(w + " ")
+            verify(i >= 0, "word " + w)
+            return reader.charIndexAt(i)
+        }
+
+        // hyphenation (backend/books/hyphenate.go): a row in the Font panel;
+        // soft hyphens break words at line ends and are not counted
+        function test_06e_hyphenation() {
+            Bus.deliver(101, state())
+            openTestBook()
+            let h = "<p>"
+            for (let i = 0; i < 60; i++) h += "Ex\u00ADtra\u00ADor\u00ADdi\u00ADnar\u00ADi\u00ADly in\u00ADter\u00ADna\u00ADtion\u00ADal w" + i + " "
+            Bus.deliver(103, { book: "b1", chapter: 0, html: h + "</p>", char: 0, end: false })
+            tryVerify(function () { return reader.pageHtml !== "" && te.length > 100 }, 3000)
+            wait(200)
+            compare(reader.charIndexAt(te.length), 60 * ("Extraordinarilyinternationalw".length) + 10 + 50 * 2, "soft hyphens not counted")
+            shot("hyphenation")
+            app.toast = ""
+            app.panel = "font"; wait(50)
+            verify(findButton(app, "On").active, "on by default")
+            Bus.clear()
+            tapButton("Off")
+            compare(Bus.lastOf(6).hyphenate, false)
+            Bus.deliver(101, state({ settings: Object.assign({}, state().settings, { hyphenate: false }) }))
+            verify(findButton(app, "Off").active)
+            fontPanelClose()
+            Bus.deliver(101, state())
+        }
+
+        // search (backend/books/search.go): the panel, the list, the match
+        // shown selected, the bar's ‹ › ×, and ‹ Back to where it started
+        function test_10_search() {
+            Bus.deliver(101, state())
+            openTestBook()
+            deliverChapter(0, 30)
+            app.toast = ""
+            const start = reader.topChar()
+            app.menuOpen = true; wait(50)
+            tapButton("Search")
+            compare(app.panel, "search")
+            const field = findChild(app, "searchField")
+            verify(findTextWith(app, "Case and accents"), "hint")
+            field.text = "c0p20w3"
+            Bus.clear()
+            tapButton("Search")
+            compare(Bus.lastOf(15).query, "c0p20w3")
+            verify(findTextWith(app, "Searching"), "searching")
+            const k = charOfWord("c0p20w3")
+            Bus.deliver(109, { book: "b1", query: "c0p20w3", total: 2, hits: [
+                { chapter: 0, char: k, len: 7, before: "… c0p20w1 c0p20w2 ", match: "c0p20w3", after: " c0p20w4 c0p20w5 …", title: "One", percent: 0.1 },
+                { chapter: 2, char: 8, len: 6, before: "a <b> Chapter 3 ", match: "c2p0w0", after: " & more", title: "Two", percent: 0.7 } ] })
+            verify(findTextWith(app, "2 matches for"), "count")
+            verify(findTextWith(app, "One  ·  10%"), "where")
+            wait(100)
+            shot("search-list")
+            Bus.clear()
+            tapItem(findTextWith(app, "c0p20w2"))
+            compare(app.panel, "")
+            compare(app.hitIndex, 0)
+            tryVerify(function () { return te.selectedText === "c0p20w3" }, 2000, "the match selected")
+            verify(reader.topChar() <= k && reader.positionOfChar(k) < te.positionAt(4, reader.pageStarts[reader.pageIndex] + reader.pageHeights[reader.pageIndex] - 2),
+                   "the match on screen")
+            verify(findChild(app, "searchBar").visible)
+            verify(findButton(app, "1 / 2   \u201Cc0p20w3\u201D"), "the bar")
+            wait(200)
+            shot("search-match")
+            // the next match: another chapter
+            tapButton("\u203A")
+            compare(Bus.lastOf(3).chapter, 2)
+            compare(Bus.lastOf(3).char, 8)
+            Bus.deliver(103, { book: "b1", chapter: 2, html: chapterHtml(2, 30), char: 8, end: false })
+            tryVerify(function () { return te.selectedText === "c2p0w0" }, 3000, "selected in chapter 2")
+            verify(findButton(app, "2 / 2   \u201Cc0p20w3\u201D"))
+            // the bar's label opens the list again; × ends it
+            tapButton("2 / 2   \u201Cc0p20w3\u201D")
+            compare(app.panel, "search")
+            compare(findChild(app, "searchField").text, "c0p20w3")
+            tapButton("\u00D7")
+            compare(app.panel, "")
+            tapButton("\u00D7")
+            verify(!findChild(app, "searchBar").visible)
+            compare(te.selectedText, "")
+            compare(reader.highlight, null)
+            // ‹ Back: where the search started
+            compare(app.backStack.length, 1)
+            compare(app.backStack[0].chapter, 0)
+            compare(app.backStack[0].char, start)
+            // another book: no matches left over
+            openTestBook()
+            compare(app.searchHits.length, 0)
+        }
+
         function test_06_font_panel_defaults_and_paragraphs() {
             Bus.deliver(101, state({ settings: { fontSize: 40, font: "sans", lineSpacing: 150, align: "left", margin: "wide", paragraphs: "spaced" } }))
             openTestBook()

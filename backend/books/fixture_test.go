@@ -52,7 +52,7 @@ func TestQtFixture(t *testing.T) {
 	walk(body)
 	c := ep.renderChapter(0, func(p string) (string, int, int, bool) {
 		return "/repo/app/books/icon.png", 128, 128, true
-	}, 800)
+	}, 800, renderOptions{hyphenate: true}) // soft hyphens: not counted in Qt either
 	var samples []fixtureSample
 	for k := range c.pos {
 		p := c.pos[k]

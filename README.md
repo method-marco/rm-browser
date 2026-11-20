@@ -65,6 +65,12 @@ where the tablet keeps them, and never changes them. PDFs are not shown.
 - Chapters follow each other: past the last page of a chapter comes the next one. **Contents**
   (the book's own table of contents, with the share of the book where each entry starts), links
   inside the book (footnotes) with **‹ Back**, page slider, chapter and percentage in the menu
+- **Search** in the book (menu › Search): case and accents don't matter; each match is listed
+  with its chapter and the text around it. A match opens selected on its page, with a bar to
+  step to the next or previous one; **‹ Back** returns to where the search started
+- **Hyphenation** (on by default, in the Font panel): words break at line ends where the TeX
+  hyphenation patterns allow, by the book's language (English, German, French, Spanish,
+  Italian, Dutch; books without a language as English). Headings and code stay whole
 - The library list shows author, subfolder and how far you are; books you read come first. The
   book open when you closed the app opens again at your page
 - Pictures are converted like the browser's (colour or grey, sized for the screen, or hidden)
@@ -253,6 +259,8 @@ backend/               Go -> one static binary per app (no cgo)
     epub.go            EPUB parsing into KOReader's (crengine's) DOM, xpointers, table of
                        contents (from kosync-native-reader's bridge)
     render.go          chapter -> Qt rich text, with each visible character's source position
+    hyphenate.go       soft hyphens from TeX's patterns (hyph/: hyph-utf8, see NOTICES.txt)
+    search.go          search in the book (case and accents ignored)
     book.go            percentages, xpointer <-> reader position
     kosync.go          the sync server client, KOReader's document digest
     main.go            messages, reading positions, automatic sync
@@ -263,3 +271,8 @@ packaging/vellum/      reader-browser/VELBUILD, reader-books/VELBUILD
 ## License
 
 MIT
+
+The hyphenation patterns in `backend/books/hyph/` come from the
+[hyph-utf8](https://www.hyphenation.org/tex) package and keep their own licences (MIT, and a
+permissive notice for US English); their copyright notices are in
+`backend/books/hyph/NOTICES.txt`.

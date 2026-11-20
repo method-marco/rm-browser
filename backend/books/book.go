@@ -36,6 +36,8 @@ type book struct {
 
 	dry   map[int]*chapter // counting renders (positions only), a few kept
 	order []int
+
+	searchTexts []*searchText // per chapter, made by the first search (search.go)
 }
 
 func loadBook(lib *library, id string) (*book, error) {
@@ -63,7 +65,7 @@ func loadBook(lib *library, id string) (*book, error) {
 	n := len(ep.frags)
 	b.counts, b.pictures, b.prefix, b.anchors = make([]int, n), make([]int, n), make([]int, n), make([]map[string]int, n)
 	for i := 0; i < n; i++ {
-		c := ep.renderChapter(i, nil, 0)
+		c := ep.renderChapter(i, nil, 0, renderOptions{})
 		b.counts[i], b.pictures[i], b.anchors[i] = len(c.pos), c.pictures, c.anchors
 		b.prefix[i] = b.total
 		b.total += len(c.pos)
@@ -104,7 +106,7 @@ func (b *book) dryChapter(ch int) *chapter {
 	if c, ok := b.dry[ch]; ok {
 		return c
 	}
-	c := b.ep.renderChapter(ch, nil, 0)
+	c := b.ep.renderChapter(ch, nil, 0, renderOptions{})
 	b.dry[ch] = c
 	b.order = append(b.order, ch)
 	if len(b.order) > 4 {

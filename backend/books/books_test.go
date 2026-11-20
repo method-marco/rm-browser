@@ -118,7 +118,7 @@ func TestEPUBAndChapters(t *testing.T) {
 	c := ep.renderChapter(0, func(p string) (string, int, int, bool) {
 		asked = append(asked, p)
 		return "/cache/img/x.jpg", 1200, 800, true
-	}, 600)
+	}, 600, renderOptions{})
 	for _, want := range []string{
 		"<h2>Chapter One</h2>", "<i>dark</i>", "torrents &amp; more", `<p align="center" style="line-height:125%">* * *</p>`,
 		`href="book:2#end"`, `<img src="file:///cache/img/x.jpg" width="590" height="393"/>`, "&lt;nothing&gt;",
@@ -146,10 +146,10 @@ func TestEPUBAndChapters(t *testing.T) {
 	if k := c.anchors["later"]; v[k] != 'L' {
 		t.Errorf("anchor 'later' at %d: %q", k, v[k])
 	}
-	if e := ep.renderChapter(1, nil, 0); e.html != "" || len(e.pos) != 0 {
+	if e := ep.renderChapter(1, nil, 0, renderOptions{}); e.html != "" || len(e.pos) != 0 {
 		t.Errorf("empty chapter: %q", e.html)
 	}
-	if two := ep.renderChapter(2, nil, 0); !strings.Contains(two.html, `href="https://example.org/x"`) {
+	if two := ep.renderChapter(2, nil, 0, renderOptions{}); !strings.Contains(two.html, `href="https://example.org/x"`) {
 		t.Errorf("web link: %s", two.html)
 	}
 }
@@ -517,8 +517,8 @@ func TestAppFlowAndSync(t *testing.T) {
 
 func TestBookStyle(t *testing.T) {
 	ep := openTestBook(t)
-	plain := ep.renderChapter(0, nil, 0)
-	styled := ep.renderChapter(0, nil, 0, true)
+	plain := ep.renderChapter(0, nil, 0, renderOptions{})
+	styled := ep.renderChapter(0, nil, 0, renderOptions{bookStyle: true})
 	for _, want := range []string{
 		`<h2 align="center" style="line-height:125%; font-size:1.5em">Chapter One</h2>`,
 		`<p style="line-height:125%; text-indent:1.5em; margin-top:0em; margin-bottom:0.5em">It was a `,

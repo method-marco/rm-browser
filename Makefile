@@ -22,9 +22,11 @@ dir_rm-browser = browser
 dir_rm-books   = books
 pkg_rm-browser = .
 pkg_rm-books   = ./books
+# third-party notices shipped with an app (files built into its backend)
+notices_rm-books = backend/books/hyph/NOTICES.txt
 
 SHARED_QML = app/shared/* app/fonts/*.ttf
-GO_SRC     = $(shell find backend -name '*.go' -not -name '*_test.go') backend/go.mod backend/go.sum
+GO_SRC     = $(shell find backend -name '*.go' -not -name '*_test.go') $(wildcard backend/books/hyph/*.txt) backend/go.mod backend/go.sum
 
 .PHONY: all test clean docker qmltest install aarch64 armv7
 
@@ -48,7 +50,8 @@ package = rm -rf build/$(1)/$(2) && mkdir -p build/$(1)/$(2)/backend dist && \
 	cp app/$(dir_$(2))/manifest.json app/$(dir_$(2))/icon.png build/$(1)/$(2)/ && \
 	cp build/$(2).rcc build/$(1)/$(2)/resources.rcc && \
 	cp build/$(1)/$(2).entry build/$(1)/$(2)/backend/entry && chmod 755 build/$(1)/$(2)/backend/entry && \
-	cp LICENSE build/$(1)/$(2)/ && tar -C build/$(1) -czf dist/$(2)-$(1).tar.gz $(2);
+	cp LICENSE build/$(1)/$(2)/ && \
+	$(if $(notices_$(2)),cp $(notices_$(2)) build/$(1)/$(2)/THIRD-PARTY-NOTICES.txt &&) tar -C build/$(1) -czf dist/$(2)-$(1).tar.gz $(2);
 
 aarch64 armv7: %: $(foreach a,$(APPS),build/$(a).rcc build/%/$(a).entry)
 	$(foreach a,$(APPS),$(call package,$*,$(a)))

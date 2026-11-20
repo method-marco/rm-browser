@@ -56,6 +56,7 @@ type epubBook struct {
 	files     map[string]*zip.File
 	title     string
 	author    string
+	lang      string     // the book's language (dc:language), for hyphenation
 	frags     []*domNode // body element of each spine item (nil if missing)
 	fragPaths []string   // path of each spine item in the EPUB
 	fragOf    map[string]int
@@ -208,7 +209,8 @@ func findElem(n *domNode, name string) *domNode {
 type opfPackage struct {
 	Metadata struct {
 		Titles   []string `xml:"title"`
-		Creators []string `xml:"creator"`
+		Creators  []string `xml:"creator"`
+		Languages []string `xml:"language"`
 	} `xml:"metadata"`
 	Manifest []struct {
 		ID         string `xml:"id,attr"`
@@ -285,6 +287,9 @@ func newEPUB(r io.ReaderAt, size int64) (*epubBook, opfPackage, string, error) {
 	}
 	if len(pkg.Metadata.Creators) > 0 {
 		b.author = strings.Join(strings.Fields(pkg.Metadata.Creators[0]), " ")
+	}
+	if len(pkg.Metadata.Languages) > 0 {
+		b.lang = strings.TrimSpace(pkg.Metadata.Languages[0])
 	}
 	return b, pkg, opfPath, nil
 }

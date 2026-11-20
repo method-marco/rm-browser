@@ -48,6 +48,9 @@ package() {
 	for _f in backend/fonts/OFL-*.txt; do
 		install -Dm644 "$_f" "$pkgdir"/home/root/.vellum/licenses/$pkgname/"$(basename "$_f")"
 	done
+	# the hyphenation patterns built into the backend (hyph-utf8)
+	install -Dm644 backend/books/hyph/NOTICES.txt \
+		"$pkgdir"/home/root/.vellum/licenses/$pkgname/HYPHENATION-NOTICES.txt
 	echo "$url" > "$pkgdir"/home/root/.vellum/licenses/$pkgname/SOURCES
 }
 

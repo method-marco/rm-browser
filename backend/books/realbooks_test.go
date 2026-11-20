@@ -40,8 +40,8 @@ func TestRealBooks(t *testing.T) {
 		open := time.Since(t0)
 		trips, bad := 0, 0
 		for ch := 0; ch < b.chapters(); ch++ {
-			c := b.ep.renderChapter(ch, nil, 0)
-			st := b.ep.renderChapter(ch, nil, 0, true) // the book's style: the same text
+			c := b.ep.renderChapter(ch, nil, 0, renderOptions{})
+			st := b.ep.renderChapter(ch, nil, 0, renderOptions{bookStyle: true}) // the book's style: the same text
 			if len(st.pos) != len(c.pos) || len(visible(st.html)) != len(st.pos) {
 				t.Errorf("%s chapter %d: book style %d positions, plain %d", lb.Title, ch, len(st.pos), len(c.pos))
 			}
