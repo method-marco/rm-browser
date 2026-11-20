@@ -99,7 +99,8 @@ Item {
                               + 'px; margin-top:0px; margin-bottom:0px">')
         if (bookSpacing) out = spaceBlocks(out)
         // links are written black: the theme's text colour
-        if (String(Theme.ink) !== "#000000") out = out.replace(/color:#000000/g, "color:" + String(Theme.ink))
+        const ink = String(Theme.themes[Theme.current].ink)   // (current even before Theme.ink follows)
+        if (ink !== "#000000") out = out.replace(/color:#000000/g, "color:" + ink)
         if (justified) out = out.replace(/<(p|li) style="line-height/g, '<$1 align="justify" style="line-height')
         return out
     }
@@ -175,8 +176,22 @@ Item {
         schedulePaginate()
     }
     readonly property bool hasEm: /style="[^"]*\dem\b/.test(source)
-    property string layoutKey: lineSpacing + "|" + justified + "|" + indent + "|" + (indent || hasEm || bookSpacing ? fontSize : 0) + "|" + Theme.current
+    property string layoutKey: lineSpacing + "|" + justified + "|" + indent + "|" + (indent || hasEm || bookSpacing ? fontSize : 0)
     onLayoutKeyChanged: if (active && source !== "") rerender()
+    // A new theme only recolours (the links; the text follows te.color): the
+    // layout stays, so the text is replaced in place, in the same screen
+    // update as the new paper. Clearing it first (as rerender does) left the
+    // page blank on the tablet: the text's own update came during the
+    // screen's full refresh and was lost.
+    Connections {
+        target: Theme
+        function onCurrentChanged() {
+            if (rv.source === "") return
+            const h = rv.restyle(rv.safeHtml(rv.source))
+            if (rv.nextHtml !== "") rv.nextHtml = h
+            else if (rv.pageHtml !== "" && h !== rv.pageHtml) rv.pageHtml = h
+        }
+    }
 
     property string nextHtml: ""
     Timer {

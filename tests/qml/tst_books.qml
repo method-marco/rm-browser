@@ -351,6 +351,8 @@ Item {
             tapButton("Soft dark")
             compare(Bus.lastOf(6).theme, "softdark")
             Bus.deliver(101, themed({ theme: "softdark" }))
+            // recoloured in place: never cleared (an e-ink refresh lost the text)
+            verify(reader.pageHtml !== "" && reader.pageHtml.indexOf("color:#000000") < 0, "recoloured in place")
             tryCompare(app, "color", "#3a3a3a")
             compare(String(te.color), "#e6e6e6")
             tryVerify(function () { return reader.pageHtml.indexOf("color:#e6e6e6") > 0 && reader.pageHtml.indexOf("color:#000000") < 0 }, 3000, "links")
