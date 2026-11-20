@@ -334,6 +334,9 @@ Item {
             compare(Bus.lastOf(6).theme, "nightshift")
             verify(findButton(app, "A+") && !findButton(app, "Night shift"), "list closed after the choice")
             Bus.deliver(101, themed({ theme: "nightshift" }))
+            // the text is set again although it stays black: the tablet
+            // redraws only what changed, the paper hid the unchanged text
+            compare(reader.pageHtml, "", "text set again")
             tryCompare(app, "color", "#e8c994")
             compare(String(te.color), "#000000", "black text")
             compare(String(findButton(app, "Left").color), "#e8c994", "buttons on the warm paper")
@@ -351,8 +354,6 @@ Item {
             tapButton("Soft dark")
             compare(Bus.lastOf(6).theme, "softdark")
             Bus.deliver(101, themed({ theme: "softdark" }))
-            // recoloured in place: never cleared (an e-ink refresh lost the text)
-            verify(reader.pageHtml !== "" && reader.pageHtml.indexOf("color:#000000") < 0, "recoloured in place")
             tryCompare(app, "color", "#3a3a3a")
             compare(String(te.color), "#e6e6e6")
             tryVerify(function () { return reader.pageHtml.indexOf("color:#e6e6e6") > 0 && reader.pageHtml.indexOf("color:#000000") < 0 }, 3000, "links")
@@ -447,5 +448,42 @@ Item {
             win.width = 954; win.height = 1696
             tryVerify(function () { return !reader.spread }, 2000)
         }
+
+        // pixels on the page that aren't paper (every 6th in each direction)
+        function inkPixels() {
+            const img = grabImage(app)
+            const ra = findChild(app, "readerArea")
+            const o = ra.mapToItem(app, 0, 0)
+            const paper = String(app.color)
+            let n = 0
+            for (let y = o.y; y < o.y + ra.height; y += 6)
+                for (let x = o.x; x < o.x + ra.width; x += 6)
+                    if (String(img.pixel(x, y)) !== paper) n++
+            return n
+        }
+        // Deep in a long chapter, new text at the same scroll position stayed
+        // (partly) blank: TextEdit draws only the blocks in its viewport.
+        function test_06d_redraw_deep_in_a_long_chapter() {
+            Bus.deliver(101, state())
+            openTestBook()
+            Bus.deliver(103, { book: "b1", chapter: 0, html: chapterHtml(0, 900), char: 0, end: false })
+            tryVerify(function () { return reader.pageCount > 60 && reader.pageHtml !== "" }, 10000, "paginated")
+            wait(200)
+            reader.goToPage(64); wait(200)
+            const top = reader.topChar(), full = inkPixels()
+            verify(full > 2000, "text on the page: " + full)
+            const steps = [{ theme: "nightshift" }, { theme: "softdark" }, { theme: "default" }, { align: "left" }, { align: "justify" }]
+            for (const st of steps) {
+                Bus.deliver(101, themed(st))
+                wait(100)
+                tryVerify(function () { return reader.pageHtml !== "" && reader.pageCount > 60 }, 3000)
+                wait(300)
+                compare(reader.topChar(), top, "same page after " + JSON.stringify(st))
+                const n = inkPixels()
+                verify(n > full * 0.8, JSON.stringify(st) + ": " + n + " of " + full + " pixels drawn")
+            }
+            Bus.deliver(101, state())
+        }
+
     }
 }

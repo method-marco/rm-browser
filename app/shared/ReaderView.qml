@@ -166,11 +166,15 @@ Item {
     // topCharPos is current (recorded at every pagination and page turn);
     // not recorded again here: the new font may already be laid out, and
     // the old page starts would point at other text.
+    // Back to the top first, as for a new chapter (see redrawPage).
     function rerender() {
         if (source === "") return
         const keep = topCharPos
         pageHtml = ""
         nextHtml = restyle(safeHtml(source))
+        pageIndex = 0
+        pageStarts = [0]
+        pageHeights = [readerArea.height]
         setTextTimer.restart()
         topCharPos = keep
         schedulePaginate()
@@ -178,21 +182,26 @@ Item {
     readonly property bool hasEm: /style="[^"]*\dem\b/.test(source)
     property string layoutKey: lineSpacing + "|" + justified + "|" + indent + "|" + (indent || hasEm || bookSpacing ? fontSize : 0)
     onLayoutKeyChanged: if (active && source !== "") rerender()
-    // A new theme only recolours (the links; the text follows te.color): the
-    // layout stays, so the text is replaced in place, in the same screen
-    // update as the new paper. Clearing it first (as rerender does) left the
-    // page blank on the tablet: the text's own update came during the
-    // screen's full refresh and was lost.
+    // A new theme: the text is set again, even when its colour stays (black
+    // on cream): the tablet redraws only what changed, so the new paper was
+    // drawn over the unchanged text and the page stayed blank until a turn.
     Connections {
         target: Theme
         function onCurrentChanged() {
             if (rv.source === "") return
-            const h = rv.restyle(rv.safeHtml(rv.source))
-            if (rv.nextHtml !== "") rv.nextHtml = h
-            else if (rv.pageHtml !== "" && h !== rv.pageHtml) rv.pageHtml = h
+            if (rv.nextHtml !== "") rv.nextHtml = rv.restyle(rv.safeHtml(rv.source))
+            else rv.rerender()
         }
     }
 
+    // TextEdit draws only the blocks in its viewport and keeps what it drew
+    // until the viewport leaves that region. Right after new text, its first
+    // drawing of the page (or of the top, before the jump to the page) can
+    // come before the text is laid out there: nothing, and it stays blank
+    // (deep in a long chapter, after a theme or font change). A jump far
+    // away and back after every pagination makes it look again.
+    property real nudge: 0
+    function redrawPage() { nudge = 3 * readerArea.height + 100; nudge = 0 }
     property string nextHtml: ""
     Timer {
         id: setTextTimer
@@ -234,6 +243,7 @@ Item {
         pageHeights = heights
         pageIndex = spreadStart(Math.max(0, Math.min(target, starts.length - 1)))
         recordTop()
+        redrawPage()
         laidOut()
     }
     function pageOfY(y, starts) {
@@ -361,7 +371,7 @@ Item {
             interactive: false
             contentWidth: width
             contentHeight: te.contentHeight
-            contentY: pageStarts[pageIndex] || 0
+            contentY: (pageStarts[pageIndex] || 0) + rv.nudge
             TextEdit {
                 id: te
                 objectName: "te"
@@ -415,7 +425,7 @@ Item {
             interactive: false
             contentWidth: width
             contentHeight: te2.contentHeight
-            contentY: pageStarts[index] || 0
+            contentY: (pageStarts[index] || 0) + rv.nudge
             TextEdit {
                 id: te2
                 objectName: "te2"
